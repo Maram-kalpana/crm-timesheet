@@ -1,16 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Grid, Box, Typography, List, ListItem, ListItemText, Chip } from '@mui/material';
-import { Users, UserCheck, UserX, Clock, CalendarClock, FolderKanban, Megaphone, Plus } from 'lucide-react';
+import { Users, UserCheck, UserX, Clock, CalendarClock, FolderKanban, Megaphone, CheckSquare, CalendarDays, Wallet } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, Title, Tooltip, Legend, Filler } from 'chart.js';
-import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import { useAuth } from '../../context/AuthContext';
 import { dashboardAPI } from '../../services/services';
-import { StatCard, PageHeader, Card, Loader, Button, Avatar } from '../../components/ui';
+import { StatCard, PageHeader, Card, Loader, Avatar } from '../../components/ui';
 import { colors } from '../../theme';
 import { formatDate, getFullName } from '../../utils/helpers';
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, Title, Tooltip, Legend, Filler);
 
 const AdminDashboard = () => {
   const [data, setData] = useState(null);
@@ -27,21 +23,13 @@ const AdminDashboard = () => {
   if (loading) return <Loader message="Loading dashboard..." />;
 
   const stats = data?.stats || {};
-  const trend = data?.attendanceTrend || [];
-  const departments = data?.departmentStats || [];
 
-  const lineData = {
-    labels: trend.map((t) => formatDate(t.date, 'DD MMM')),
-    datasets: [
-      { label: 'Present', data: trend.map((t) => t.present), borderColor: colors.success, backgroundColor: `${colors.success}20`, fill: true, tension: 0.4 },
-      { label: 'Absent', data: trend.map((t) => t.absent), borderColor: colors.danger, backgroundColor: `${colors.danger}20`, fill: true, tension: 0.4 },
-    ],
-  };
-
-  const deptData = {
-    labels: departments.map((d) => d.name),
-    datasets: [{ data: departments.map((d) => d.count), backgroundColor: [colors.primary, colors.success, colors.warning, '#8B5CF6', '#EC4899'], borderWidth: 0 }],
-  };
+  const quickActions = [
+    { label: 'Mark Attendance', path: '/attendance', icon: CheckSquare, color: colors.primary },
+    { label: 'Manage Leaves', path: '/leave', icon: CalendarDays, color: colors.success },
+    { label: 'View Projects', path: '/projects', icon: FolderKanban, color: colors.warning },
+    { label: 'Run Payroll', path: '/payroll', icon: Wallet, color: '#8B5CF6' },
+  ];
 
   return (
     <Box>
@@ -49,11 +37,6 @@ const AdminDashboard = () => {
         title="Dashboard"
         subtitle="Welcome back! Here's what's happening today."
         breadcrumb={[{ label: 'Dashboard', path: '/dashboard' }]}
-        action={
-          <Button startIcon={<Plus size={18} />} onClick={() => navigate('/employees')}>
-            Add Employee
-          </Button>
-        }
       />
 
       <Grid container spacing={2} mb={3}>
@@ -68,27 +51,6 @@ const AdminDashboard = () => {
             <StatCard {...s} />
           </Grid>
         ))}
-      </Grid>
-
-      <Grid container spacing={3} mb={3}>
-        <Grid size={{ xs: 12, lg: 8 }}>
-          <Card title="Attendance Trend" subtitle="Last 30 days">
-            <Box height={300}>
-              {trend.length ? <Line data={lineData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }} /> : (
-                <Typography color="text.secondary" textAlign="center" pt={10}>No attendance data yet</Typography>
-              )}
-            </Box>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 12, lg: 4 }}>
-          <Card title="By Department">
-            <Box height={300} display="flex" alignItems="center" justifyContent="center">
-              {departments.length ? <Doughnut data={deptData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }} /> : (
-                <Typography color="text.secondary">No department data</Typography>
-              )}
-            </Box>
-          </Card>
-        </Grid>
       </Grid>
 
       <Grid container spacing={3}>
@@ -120,18 +82,16 @@ const AdminDashboard = () => {
           </Card>
         </Grid>
         <Grid size={{ xs: 12 }}>
-          <Card title="Quick Actions">
-            <Box display="flex" gap={2} flexWrap="wrap">
-              {[
-                { label: 'Mark Attendance', path: '/attendance' },
-                { label: 'Manage Leaves', path: '/leave' },
-                { label: 'View Projects', path: '/projects' },
-                { label: 'Run Payroll', path: '/payroll' },
-              ].map((a) => (
-                <Button key={a.label} variant="outlined" onClick={() => navigate(a.path)}>{a.label}</Button>
-              ))}
-            </Box>
-          </Card>
+          <Typography variant="subtitle1" fontWeight={700} mb={2}>Quick Actions</Typography>
+          <Grid container spacing={2}>
+            {quickActions.map((qa) => (
+              <Grid key={qa.label} size={{ xs: 12, sm: 6, md: 4, lg: 2.4 }}>
+                <Box onClick={() => navigate(qa.path)} sx={{ cursor: 'pointer' }}>
+                  <StatCard title={qa.label} icon={qa.icon} color={qa.color} />
+                </Box>
+              </Grid>
+            ))}
+          </Grid>
         </Grid>
       </Grid>
     </Box>

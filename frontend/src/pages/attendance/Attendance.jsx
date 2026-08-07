@@ -1,15 +1,31 @@
 import { useEffect, useState } from 'react';
 import { Grid, Box, Typography, Chip } from '@mui/material';
-import { LogIn, LogOut, MapPin, Camera, Clock, Download } from 'lucide-react';
+import { LogIn, LogOut, MapPin, Clock, Download } from 'lucide-react';
 import { toast } from 'react-toastify';
 import dayjs from 'dayjs';
 import { useAuth } from '../../context/AuthContext';
 import { attendanceAPI } from '../../services/services';
 import {
-  PageHeader, Card, Button, DataTable, StatusBadge, Loader, SearchBar, Select,
+  PageHeader, Card, Button, DataTable, StatusBadge, Loader, SearchBar, Select, CameraCapture,
 } from '../../components/ui';
 import { colors } from '../../theme';
-import { formatDate, formatDateTime, calculateWorkingTime, getErrorMessage, downloadBlob } from '../../utils/helpers';
+import { formatDate, calculateWorkingTime, getErrorMessage, downloadBlob, monthNames } from '../../utils/helpers';
+
+const getLocationString = () =>
+  new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Geolocation is not supported by this browser.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        resolve(`${latitude.toFixed(6)},${longitude.toFixed(6)}`);
+      },
+      () => reject(new Error('Location access denied. Please allow location permission.')),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
 
 const Attendance = () => {
   const { user, isAdmin } = useAuth();
@@ -19,26 +35,29 @@ const Attendance = () => {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [timer, setTimer] = useState('00:00:00');
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [selfiePreview, setSelfiePreview] = useState(null);
+  const [month, setMonth] = useState(dayjs().month() + 1);
+  const [year, setYear] = useState(dayjs().year());
 
-  const [historyPage, setHistoryPage] = useState(1);
-  const [historyLimit, setHistoryLimit] = useState(10);
-  const [allPage, setAllPage] = useState(1);
-  const [allLimit, setAllLimit] = useState(10);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(10);
+
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraAction, setCameraAction] = useState(null); // 'in' | 'out'
 
   const fetchData = async () => {
     try {
-      const [todayRes, historyRes] = await Promise.all([
-        attendanceAPI.today(),
-        attendanceAPI.history({ month: dayjs().month() + 1, year: dayjs().year() }),
-      ]);
+      const todayRes = await attendanceAPI.today();
       setToday(todayRes.data.data);
-      setHistory(historyRes.data.data || []);
+
       if (isAdmin) {
-        const allRes = await attendanceAPI.getAll({ search, status: statusFilter });
+        const allRes = await attendanceAPI.getAll({ search, status: statusFilter, month, year });
         setAllRecords(allRes.data.data || []);
+      } else {
+        const historyRes = await attendanceAPI.history({ month, year });
+        setHistory(historyRes.data.data || []);
       }
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -47,9 +66,8 @@ const Attendance = () => {
     }
   };
 
-  useEffect(() => { fetchData(); }, [isAdmin, search, statusFilter]);
-  useEffect(() => { setHistoryPage(1); }, [history.length]);
-  useEffect(() => { setAllPage(1); }, [search, statusFilter]);
+  useEffect(() => { fetchData(); }, [isAdmin, search, statusFilter, month, year]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, month, year]);
 
   useEffect(() => {
     if (today?.clock_in && !today?.clock_out) {
@@ -58,46 +76,45 @@ const Attendance = () => {
     }
   }, [today]);
 
-  const handleClockIn = async () => {
+  const openCamera = (action) => {
+    setCameraAction(action);
+    setCameraOpen(true);
+  };
+
+  const closeCamera = () => {
+    setCameraOpen(false);
+    setCameraAction(null);
+  };
+
+  const handleCameraConfirm = async (selfieBlob) => {
     setActionLoading(true);
     try {
+      const location = await getLocationString();
+
       const formData = new FormData();
-      formData.append('location', 'Office / Remote');
-      if (selfiePreview) {
-        const blob = await fetch(selfiePreview).then((r) => r.blob());
-        formData.append('selfie', blob, 'selfie.jpg');
+      formData.append('location', location);
+      formData.append('selfie', selfieBlob, 'selfie.jpg');
+
+      if (cameraAction === 'in') {
+        await attendanceAPI.clockIn(formData);
+        toast.success('Clocked in successfully!');
+      } else {
+        await attendanceAPI.clockOut(formData);
+        toast.success('Clocked out successfully!');
       }
-      await attendanceAPI.clockIn(formData);
-      toast.success('Clocked in successfully!');
+
+      closeCamera();
       fetchData();
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(error.message || getErrorMessage(error));
     } finally {
       setActionLoading(false);
     }
-  };
-
-  const handleClockOut = async () => {
-    setActionLoading(true);
-    try {
-      await attendanceAPI.clockOut();
-      toast.success('Clocked out successfully!');
-      fetchData();
-    } catch (error) {
-      toast.error(getErrorMessage(error));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleSelfieCapture = (e) => {
-    const file = e.target.files?.[0];
-    if (file) setSelfiePreview(URL.createObjectURL(file));
   };
 
   const handleExport = async () => {
     try {
-      const { data } = await attendanceAPI.export({ month: dayjs().month() + 1, year: dayjs().year() });
+      const { data } = await attendanceAPI.export({ month, year });
       downloadBlob(data, 'attendance.xlsx');
       toast.success('Exported successfully');
     } catch (error) {
@@ -117,7 +134,7 @@ const Attendance = () => {
     { field: 'employee_id', headerName: 'ID' },
     { field: 'first_name', headerName: 'Name', renderCell: ({ row }) => `${row.first_name} ${row.last_name}` },
     { field: 'department_name', headerName: 'Department' },
-    ...columns.slice(1),
+    ...columns,
   ];
 
   if (loading) return <Loader />;
@@ -125,8 +142,8 @@ const Attendance = () => {
   const canClockIn = !today?.clock_in;
   const canClockOut = today?.clock_in && !today?.clock_out;
 
-  const paginatedHistory = history.slice((historyPage - 1) * historyLimit, historyPage * historyLimit);
-  const paginatedAllRecords = allRecords.slice((allPage - 1) * allLimit, allPage * allLimit);
+  const rows = isAdmin ? allRecords : history;
+  const paginatedRows = rows.slice((page - 1) * limit, page * limit);
 
   return (
     <Box>
@@ -154,24 +171,26 @@ const Attendance = () => {
                     <Typography variant="body2">{today?.location || 'Not checked in'}</Typography>
                   </Box>
                   <Box display="flex" gap={2}>
-                    <Button startIcon={<LogIn size={18} />} onClick={handleClockIn} disabled={!canClockIn} loading={actionLoading && canClockIn}>
+                    <Button
+                      startIcon={<LogIn size={18} />}
+                      onClick={() => openCamera('in')}
+                      disabled={!canClockIn}
+                    >
                       Clock In
                     </Button>
-                    <Button variant="outlined" startIcon={<LogOut size={18} />} onClick={handleClockOut} disabled={!canClockOut} loading={actionLoading && canClockOut} color="error">
+                    <Button
+                      variant="outlined"
+                      startIcon={<LogOut size={18} />}
+                      onClick={() => openCamera('out')}
+                      disabled={!canClockOut}
+                      color="error"
+                    >
                       Clock Out
                     </Button>
                   </Box>
-                  <Box>
-                    <input type="file" accept="image/*" capture="user" id="selfie" hidden onChange={handleSelfieCapture} />
-                    <label htmlFor="selfie">
-                      <Button component="span" variant="text" startIcon={<Camera size={18} />} size="small">
-                        {selfiePreview ? 'Selfie captured' : 'Capture Selfie'}
-                      </Button>
-                    </label>
-                    {selfiePreview && (
-                      <Box component="img" src={selfiePreview} alt="Selfie" sx={{ width: 80, height: 80, borderRadius: 2, mt: 1, objectFit: 'cover' }} />
-                    )}
-                  </Box>
+                  <Typography variant="caption" color="text.secondary">
+                    A live photo and your location are captured automatically when you clock in or out.
+                  </Typography>
                 </Box>
               </Grid>
             </Grid>
@@ -181,7 +200,7 @@ const Attendance = () => {
           <Card title="Monthly Summary">
             <Box display="flex" flexDirection="column" gap={2}>
               {['present', 'late', 'absent', 'on-leave'].map((status) => {
-                const count = history.filter((h) => h.status === status).length;
+                const count = rows.filter((h) => h.status === status).length;
                 return (
                   <Box key={status} display="flex" justifyContent="space-between" alignItems="center">
                     <StatusBadge status={status} />
@@ -194,62 +213,74 @@ const Attendance = () => {
         </Grid>
       </Grid>
 
-      <Card title="Attendance History" subtitle={dayjs().format('MMMM YYYY')}>
+      <Card title="Attendance History" subtitle={`${monthNames[month - 1]} ${year}`}>
+        <Box display="flex" gap={2} mb={2} alignItems="center" flexWrap="nowrap">
+          {isAdmin && (
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <SearchBar value={search} onChange={setSearch} placeholder="Search employees..." fullWidth />
+            </Box>
+          )}
+          <Box sx={{ width: 160, flexShrink: 0 }}>
+            <Select
+              label="Month"
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              options={monthNames.map((m, i) => ({ value: i + 1, label: m }))}
+              fullWidth
+            />
+          </Box>
+          <Box sx={{ width: 120, flexShrink: 0 }}>
+            <Select
+              label="Year"
+              value={year}
+              onChange={(e) => setYear(e.target.value)}
+              options={[2024, 2025, 2026].map((y) => ({ value: y, label: String(y) }))}
+              fullWidth
+            />
+          </Box>
+          {isAdmin && (
+            <Box sx={{ width: 160, flexShrink: 0 }}>
+              <Select
+                label="Status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                options={[
+                  { value: '', label: 'All Status' },
+                  { value: 'present', label: 'Present' },
+                  { value: 'late', label: 'Late' },
+                  { value: 'absent', label: 'Absent' },
+                ]}
+                fullWidth
+              />
+            </Box>
+          )}
+          <Button
+            variant="outlined"
+            startIcon={<Download size={18} />}
+            onClick={handleExport}
+            sx={{ flexShrink: 0 }}
+          >
+            Export
+          </Button>
+        </Box>
+
         <DataTable
-          columns={columns}
-          rows={paginatedHistory}
+          columns={isAdmin ? adminColumns : columns}
+          rows={paginatedRows}
           emptyTitle="No attendance records"
-          pagination={{ total: history.length, page: historyPage, limit: historyLimit }}
-          onPageChange={setHistoryPage}
-          onRowsPerPageChange={(limit) => { setHistoryLimit(limit); setHistoryPage(1); }}
+          pagination={{ total: rows.length, page, limit }}
+          onPageChange={setPage}
+          onRowsPerPageChange={(newLimit) => { setLimit(newLimit); setPage(1); }}
         />
       </Card>
 
-      {isAdmin && (
-        <Box mt={3}>
-          <Card title="All Employees Today">
-            <Box display="flex" gap={2} mb={2} alignItems="center" flexWrap="nowrap">
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <SearchBar
-                  value={search}
-                  onChange={setSearch}
-                  placeholder="Search employees..."
-                  fullWidth
-                />
-              </Box>
-              <Box sx={{ width: 180, flexShrink: 0 }}>
-                <Select
-                  label="Status"
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  options={[
-                    { value: '', label: 'All Status' },
-                    { value: 'present', label: 'Present' },
-                    { value: 'late', label: 'Late' },
-                    { value: 'absent', label: 'Absent' },
-                  ]}
-                  fullWidth
-                />
-              </Box>
-              <Button
-                variant="outlined"
-                startIcon={<Download size={18} />}
-                onClick={handleExport}
-                sx={{ flexShrink: 0 }}
-              >
-                Export
-              </Button>
-            </Box>
-            <DataTable
-              columns={adminColumns}
-              rows={paginatedAllRecords}
-              pagination={{ total: allRecords.length, page: allPage, limit: allLimit }}
-              onPageChange={setAllPage}
-              onRowsPerPageChange={(limit) => { setAllLimit(limit); setAllPage(1); }}
-            />
-          </Card>
-        </Box>
-      )}
+      <CameraCapture
+        open={cameraOpen}
+        onClose={closeCamera}
+        onConfirm={handleCameraConfirm}
+        confirmLoading={actionLoading}
+        title={cameraAction === 'in' ? 'Clock In — Capture Selfie' : 'Clock Out — Capture Selfie'}
+      />
     </Box>
   );
 };

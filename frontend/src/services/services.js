@@ -31,7 +31,9 @@ export const attendanceAPI = {
   clockIn: (formData) => api.post('/attendance/clock-in', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
-  clockOut: () => api.post('/attendance/clock-out'),
+  clockOut: (formData) => api.post('/attendance/clock-out', formData, {
+  headers: { 'Content-Type': 'multipart/form-data' },
+}),
   today: () => api.get('/attendance/today'),
   history: (params) => api.get('/attendance/history', { params }),
   calendar: (employeeId, year, month) => api.get(`/attendance/calendar/${employeeId}/${year}/${month}`),

@@ -14,3 +14,4 @@ export { default as PageHeader } from './PageHeader';
 export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as SearchBar } from './SearchBar';
 export { default as Breadcrumb } from './Breadcrumb';
+export { default as CameraCapture } from './CameraCapture';

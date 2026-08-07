@@ -106,10 +106,33 @@ const Payroll = () => {
         title="Payroll"
         subtitle="Salary management and payslips"
         breadcrumb={[{ label: 'Payroll', path: '/payroll' }]}
-        action={isAdmin && (
-          <Button onClick={handleGenerate} loading={generating}>Generate Payslips</Button>
-        )}
       />
+
+      {isAdmin && (
+        <Box display="flex" gap={2} mb={3} alignItems="center" flexWrap="nowrap">
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Select
+              label="Month"
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              options={monthNames.map((m, i) => ({ value: i + 1, label: m }))}
+              fullWidth
+            />
+          </Box>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Select
+              label="Year"
+              value={year}
+              onChange={(e) => setYear(e.target.value)}
+              options={[2024, 2025, 2026].map((y) => ({ value: y, label: String(y) }))}
+              fullWidth
+            />
+          </Box>
+          <Button onClick={handleGenerate} loading={generating} sx={{ flexShrink: 0 }}>
+            Generate Payslips
+          </Button>
+        </Box>
+      )}
 
       {isAdmin && summary && (
         <Grid container spacing={2} mb={3}>
@@ -126,25 +149,6 @@ const Payroll = () => {
             <StatCard title="Deductions" value={formatCurrency(summary.totalDeductions)} icon={TrendingDown} color={colors.danger} />
           </Grid>
         </Grid>
-      )}
-
-      {isAdmin && (
-        <Box display="flex" gap={2} mb={3}>
-          <Select
-            label="Month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            options={monthNames.map((m, i) => ({ value: i + 1, label: m }))}
-            sx={{ minWidth: 160 }}
-          />
-          <Select
-            label="Year"
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            options={[2024, 2025, 2026].map((y) => ({ value: y, label: String(y) }))}
-            sx={{ minWidth: 120 }}
-          />
-        </Box>
       )}
 
       <Card title="Payslips">

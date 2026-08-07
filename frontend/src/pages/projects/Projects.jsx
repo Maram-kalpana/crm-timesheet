@@ -1,14 +1,20 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Grid, Box, Typography, LinearProgress, ToggleButton, ToggleButtonGroup } from '@mui/material';
-import { LayoutGrid, List, Plus } from 'lucide-react';
-import { toast } from 'react-toastify';
-import { projectAPI } from '../../services/services';
 import {
-  PageHeader, Card, Button, SearchBar, StatusBadge, Loader, EmptyState,
+  Grid, Box, Typography, LinearProgress, ToggleButton, ToggleButtonGroup,
+  Autocomplete, TextField, Chip, Drawer, IconButton, Divider,
+  Select, MenuItem, FormControl, InputLabel, FormHelperText,
+} from '@mui/material';
+import { LayoutGrid, List, Plus, X } from 'lucide-react';
+import { toast } from 'react-toastify';
+import { useForm, Controller } from 'react-hook-form';
+import { useAuth } from '../../context/AuthContext';
+import { projectAPI, employeeAPI } from '../../services/services';
+import {
+  PageHeader, Card, Button, SearchBar, StatusBadge, Loader, EmptyState, Input,
 } from '../../components/ui';
 import { colors } from '../../theme';
-import { getErrorMessage } from '../../utils/helpers';
+import { getErrorMessage, getFullName } from '../../utils/helpers';
 
 const KANBAN_COLUMNS = [
   { id: 'todo', title: 'To Do', color: colors.text.secondary },
@@ -17,13 +23,67 @@ const KANBAN_COLUMNS = [
   { id: 'done', title: 'Done', color: colors.success },
 ];
 
+const TECH_SUGGESTIONS = [
+  'React', 'Node.js', 'Express', 'MongoDB', 'MySQL', 'PostgreSQL',
+  'Redis', 'Docker', 'AWS', 'TypeScript', 'Next.js', 'Vue', 'Angular',
+  'Python', 'Django', 'Java', 'Spring Boot', 'GraphQL', 'Kubernetes',
+];
+
+const UPDATE_STATUS_OPTIONS = [
+  { value: 'in-progress', label: 'In Progress' },
+  { value: 'blocked', label: 'Blocked' },
+  { value: 'review', label: 'In Review' },
+  { value: 'completed', label: 'Completed' },
+];
+
+const DRAWER_WIDTH = 480;
+
+const formatDate = (value) => {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
+const DetailRow = ({ label, value }) => (
+  <Box display="flex" justifyContent="space-between" py={0.75}>
+    <Typography variant="body2" color="text.secondary">{label}</Typography>
+    <Typography variant="body2" fontWeight={500} textAlign="right">{value ?? '—'}</Typography>
+  </Box>
+);
+
 const Projects = () => {
+  const { isAdmin } = useAuth();
   const [projects, setProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [view, setView] = useState('list');
   const navigate = useNavigate();
+
+  const [employees, setEmployees] = useState([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const { register, handleSubmit, reset, control, formState: { errors } } = useForm();
+
+  // --- Add Update drawer state ---
+  const [updateDrawerOpen, setUpdateDrawerOpen] = useState(false);
+  const [submittingUpdate, setSubmittingUpdate] = useState(false);
+  const {
+    register: registerUpdate,
+    handleSubmit: handleSubmitUpdate,
+    reset: resetUpdate,
+    control: controlUpdate,
+    formState: { errors: updateErrors },
+  } = useForm({
+    defaultValues: {
+      date: new Date().toISOString().slice(0, 10),
+      workDone: '',
+      gitRepo: '',
+      credentials: '',
+      status: 'in-progress',
+    },
+  });
 
   useEffect(() => {
     projectAPI.getAll({ search })
@@ -32,6 +92,18 @@ const Projects = () => {
       .finally(() => setLoading(false));
   }, [search]);
 
+  useEffect(() => {
+    if (!isAdmin) return;
+    employeeAPI.getAll({ limit: 100 })
+      .then(({ data }) => setEmployees(data.data || []))
+      .catch(() => {});
+  }, [isAdmin]);
+
+  const employeeOptions = employees.map((e) => ({
+    id: e.id,
+    label: `${getFullName(e.first_name, e.last_name)}${e.designation ? ` — ${e.designation}` : ''}`,
+  }));
+
   const loadProject = async (id) => {
     try {
       const { data } = await projectAPI.getById(id);
@@ -39,6 +111,98 @@ const Projects = () => {
       setView('kanban');
     } catch (error) {
       toast.error(getErrorMessage(error));
+    }
+  };
+
+  const refreshSelectedProject = async () => {
+    if (!selectedProject) return;
+    try {
+      const { data } = await projectAPI.getById(selectedProject.id);
+      setSelectedProject(data.data);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
+  const openAddDrawer = () => {
+    reset();
+    setDrawerOpen(true);
+  };
+
+  const closeAddDrawer = () => {
+    setDrawerOpen(false);
+  };
+
+  const onSubmit = async (formData) => {
+    if (!formData.teamLead) {
+      toast.error('Please select a team lead');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const memberIds = (formData.employees || [])
+        .map((opt) => opt.id)
+        .filter((id) => id !== formData.teamLead.id);
+
+      await projectAPI.create({
+        name: formData.name,
+        description: formData.description || '',
+        startDate: formData.startDate,
+        endDate: formData.endDate,
+        teamLeadId: formData.teamLead.id,
+        memberIds,
+        techStack: formData.techStack || [],
+      });
+
+      toast.success('Project created successfully');
+      closeAddDrawer();
+      reset();
+      setLoading(true);
+      const { data } = await projectAPI.getAll({ search });
+      setProjects(data.data);
+      setLoading(false);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // --- Add Update handlers ---
+  const openAddUpdateDrawer = () => {
+    resetUpdate({
+      date: new Date().toISOString().slice(0, 10),
+      workDone: '',
+      gitRepo: '',
+      credentials: '',
+      status: 'in-progress',
+    });
+    setUpdateDrawerOpen(true);
+  };
+
+  const closeAddUpdateDrawer = () => {
+    setUpdateDrawerOpen(false);
+  };
+
+  const onSubmitUpdate = async (formData) => {
+    if (!selectedProject) return;
+    setSubmittingUpdate(true);
+    try {
+      await projectAPI.addUpdate(selectedProject.id, {
+        updateDate: formData.date,
+        updateText: formData.workDone,
+        gitRepo: formData.gitRepo || '',
+        credentials: formData.credentials || '',
+        status: formData.status,
+      });
+
+      toast.success('Update added successfully');
+      closeAddUpdateDrawer();
+      await refreshSelectedProject();
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setSubmittingUpdate(false);
     }
   };
 
@@ -62,6 +226,7 @@ const Projects = () => {
           action={
             <Box display="flex" gap={1}>
               <Button variant="outlined" onClick={() => { setSelectedProject(null); setView('list'); }}>Back to List</Button>
+              <Button startIcon={<Plus size={16} />} onClick={openAddUpdateDrawer}>Add Update</Button>
               <ToggleButtonGroup value={view} exclusive size="small">
                 <ToggleButton value="kanban"><LayoutGrid size={16} /></ToggleButton>
                 <ToggleButton value="list"><List size={16} /></ToggleButton>
@@ -70,17 +235,45 @@ const Projects = () => {
           }
         />
 
-        <Card sx={{ mb: 3 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-            <Typography fontWeight={600}>Progress</Typography>
-            <Typography color="text.secondary">{selectedProject.completion_percentage}%</Typography>
-          </Box>
-          <LinearProgress variant="determinate" value={selectedProject.completion_percentage} sx={{ height: 10, borderRadius: 2 }} />
-          <Box display="flex" gap={2} mt={2}>
-            <StatusBadge status={selectedProject.status} />
-            <Typography variant="body2" color="text.secondary">{selectedProject.member_count} members · {selectedProject.task_count} tasks</Typography>
-          </Box>
-        </Card>
+        <Grid container spacing={3} mb={3}>
+          <Grid size={{ xs: 12, md: 7 }}>
+            <Card sx={{ height: '100%' }}>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                <Typography fontWeight={600}>Progress</Typography>
+                <Typography color="text.secondary">{selectedProject.completion_percentage ?? 0}%</Typography>
+              </Box>
+              <LinearProgress
+                variant="determinate"
+                value={selectedProject.completion_percentage ?? 0}
+                sx={{ height: 10, borderRadius: 2 }}
+              />
+              <Box display="flex" gap={2} mt={2} alignItems="center">
+                <StatusBadge status={selectedProject.status} />
+                <Typography variant="body2" color="text.secondary">
+                  {selectedProject.member_count ?? 0} members · {selectedProject.task_count ?? 0} tasks
+                </Typography>
+              </Box>
+            </Card>
+          </Grid>
+
+          <Grid size={{ xs: 12, md: 5 }}>
+            <Card title="Project Details" sx={{ height: '100%' }}>
+              <DetailRow label="Team Lead" value={selectedProject.manager_name} />
+              <DetailRow label="Start Date" value={formatDate(selectedProject.start_date)} />
+              <DetailRow label="End Date" value={formatDate(selectedProject.end_date)} />
+              <Box py={0.75}>
+                <Typography variant="body2" color="text.secondary" mb={0.75}>Tech Stack</Typography>
+                <Box display="flex" flexWrap="wrap" gap={0.75}>
+                  {(selectedProject.tech_stack || []).length
+                    ? selectedProject.tech_stack.map((t) => (
+                      <Chip key={t} label={t} size="small" />
+                    ))
+                    : <Typography variant="body2" color="text.secondary">—</Typography>}
+                </Box>
+              </Box>
+            </Card>
+          </Grid>
+        </Grid>
 
         <Grid container spacing={2}>
           {KANBAN_COLUMNS.map((col) => (
@@ -104,8 +297,24 @@ const Projects = () => {
             <Card title="Activity Timeline">
               {(selectedProject.updates || []).map((u) => (
                 <Box key={u.id} py={1.5} borderBottom={`1px solid ${colors.border}`}>
+                  <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.5}>
+                    <Typography variant="caption" color="text.secondary">{formatDate(u.update_date)}</Typography>
+                    {u.status && <StatusBadge status={u.status} label={u.status} />}
+                  </Box>
                   <Typography variant="body2">{u.update_text}</Typography>
-                  <Typography variant="caption" color="text.secondary">{u.author_name} · {u.hours_spent}h</Typography>
+                  {u.git_repo && (
+                    <Typography variant="caption" color="text.secondary" component="div" mt={0.5}>
+                      Repo: {u.git_repo}
+                    </Typography>
+                  )}
+                  {u.credentials && (
+                    <Typography variant="caption" color="text.secondary" component="div">
+                      Credentials: {u.credentials}
+                    </Typography>
+                  )}
+                  <Typography variant="caption" color="text.secondary" component="div" mt={0.5}>
+                    {u.author_name}{u.hours_spent ? ` · ${u.hours_spent}h` : ''}
+                  </Typography>
                 </Box>
               ))}
               {!selectedProject.updates?.length && <Typography color="text.secondary" variant="body2">No updates yet</Typography>}
@@ -119,9 +328,110 @@ const Projects = () => {
                   <Typography variant="body2">{c.comment}</Typography>
                 </Box>
               ))}
+              {!selectedProject.comments?.length && <Typography color="text.secondary" variant="body2">No comments yet</Typography>}
             </Card>
           </Grid>
         </Grid>
+
+        {/* Add Update Drawer */}
+        <Drawer
+          anchor="right"
+          open={updateDrawerOpen}
+          onClose={closeAddUpdateDrawer}
+          sx={{ '& .MuiDrawer-paper': { width: { xs: '100%', sm: DRAWER_WIDTH } } }}
+        >
+          <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', p: 3, pb: 2 }}>
+              <Box>
+                <Typography variant="h6" fontWeight={700}>Add Update</Typography>
+                <Typography variant="body2" color="text.secondary" mt={0.5}>
+                  Log progress for {selectedProject.name}
+                </Typography>
+              </Box>
+              <IconButton onClick={closeAddUpdateDrawer} size="small">
+                <X size={20} />
+              </IconButton>
+            </Box>
+
+            <Divider />
+
+            <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12 }}>
+                  <Input
+                    label="Date"
+                    type="date"
+                    InputLabelProps={{ shrink: true }}
+                    error={updateErrors.date?.message}
+                    {...registerUpdate('date', { required: 'Date is required' })}
+                  />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Input
+                    label="Work Done"
+                    multiline
+                    rows={4}
+                    placeholder="Describe the work completed"
+                    error={updateErrors.workDone?.message}
+                    {...registerUpdate('workDone', { required: 'Work done is required' })}
+                  />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Input
+                    label="Git Repo"
+                    placeholder="https://github.com/org/repo"
+                    error={updateErrors.gitRepo?.message}
+                    {...registerUpdate('gitRepo')}
+                  />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Input
+                    label="Credentials (if any)"
+                    placeholder="e.g. staging login, API keys location"
+                    multiline
+                    rows={2}
+                    {...registerUpdate('credentials')}
+                  />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Controller
+                    name="status"
+                    control={controlUpdate}
+                    rules={{ required: 'Status is required' }}
+                    render={({ field }) => (
+                      <FormControl fullWidth error={!!updateErrors.status}>
+                        <InputLabel id="update-status-label">Status</InputLabel>
+                        <Select
+                          {...field}
+                          labelId="update-status-label"
+                          label="Status"
+                        >
+                          {UPDATE_STATUS_OPTIONS.map((opt) => (
+                            <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                          ))}
+                        </Select>
+                        {updateErrors.status && (
+                          <FormHelperText>{updateErrors.status.message}</FormHelperText>
+                        )}
+                      </FormControl>
+                    )}
+                  />
+                </Grid>
+              </Grid>
+            </Box>
+
+            <Divider />
+
+            <Box sx={{ p: 3, display: 'flex', justifyContent: 'flex-end', gap: 1.5 }}>
+              <Button variant="outlined" onClick={closeAddUpdateDrawer}>Cancel</Button>
+              <Button onClick={handleSubmitUpdate(onSubmitUpdate)} loading={submittingUpdate}>Save Update</Button>
+            </Box>
+          </Box>
+        </Drawer>
       </Box>
     );
   }
@@ -134,8 +444,15 @@ const Projects = () => {
         breadcrumb={[{ label: 'Projects', path: '/projects' }]}
       />
 
-      <Box display="flex" gap={2} mb={3} flexWrap="wrap">
-        <SearchBar value={search} onChange={setSearch} placeholder="Search projects..." sx={{ maxWidth: 320 }} />
+      <Box display="flex" gap={2} mb={3} alignItems="center" flexWrap="nowrap">
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <SearchBar value={search} onChange={setSearch} placeholder="Search projects..." fullWidth />
+        </Box>
+        {isAdmin && (
+          <Button startIcon={<Plus size={18} />} onClick={openAddDrawer} sx={{ flexShrink: 0 }}>
+            Add Project
+          </Button>
+        )}
       </Box>
 
       {!projects.length ? (
@@ -158,6 +475,147 @@ const Projects = () => {
             </Grid>
           ))}
         </Grid>
+      )}
+
+      {isAdmin && (
+        <Drawer
+          anchor="right"
+          open={drawerOpen}
+          onClose={closeAddDrawer}
+          sx={{ '& .MuiDrawer-paper': { width: { xs: '100%', sm: DRAWER_WIDTH } } }}
+        >
+          <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', p: 3, pb: 2 }}>
+              <Box>
+                <Typography variant="h6" fontWeight={700}>Add Project</Typography>
+                <Typography variant="body2" color="text.secondary" mt={0.5}>
+                  Create a project and assign a team
+                </Typography>
+              </Box>
+              <IconButton onClick={closeAddDrawer} size="small">
+                <X size={20} />
+              </IconButton>
+            </Box>
+
+            <Divider />
+
+            <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12 }}>
+                  <Input
+                    label="Project Name"
+                    error={errors.name?.message}
+                    {...register('name', { required: 'Project name is required' })}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12 }}>
+                  <Input label="Description" multiline rows={2} {...register('description')} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <Input
+                    label="Start Date"
+                    type="date"
+                    InputLabelProps={{ shrink: true }}
+                    error={errors.startDate?.message}
+                    {...register('startDate', { required: 'Required' })}
+                  />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <Input
+                    label="End Date"
+                    type="date"
+                    InputLabelProps={{ shrink: true }}
+                    error={errors.endDate?.message}
+                    {...register('endDate', { required: 'Required' })}
+                  />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Controller
+                    name="teamLead"
+                    control={control}
+                    rules={{ required: 'Team lead is required' }}
+                    render={({ field }) => (
+                      <Autocomplete
+                        options={employeeOptions}
+                        getOptionLabel={(opt) => opt.label || ''}
+                        isOptionEqualToValue={(opt, val) => opt.id === val.id}
+                        value={field.value || null}
+                        onChange={(_, value) => field.onChange(value)}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="Team Lead"
+                            error={!!errors.teamLead}
+                            helperText={errors.teamLead?.message}
+                          />
+                        )}
+                      />
+                    )}
+                  />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Controller
+                    name="employees"
+                    control={control}
+                    defaultValue={[]}
+                    render={({ field }) => (
+                      <Autocomplete
+                        multiple
+                        options={employeeOptions}
+                        getOptionLabel={(opt) => opt.label || ''}
+                        isOptionEqualToValue={(opt, val) => opt.id === val.id}
+                        value={field.value || []}
+                        onChange={(_, value) => field.onChange(value)}
+                        renderTags={(value, getTagProps) =>
+                          value.map((opt, index) => (
+                            <Chip label={opt.label} {...getTagProps({ index })} key={opt.id} size="small" />
+                          ))
+                        }
+                        renderInput={(params) => (
+                          <TextField {...params} label="Employees" placeholder="Add team members" />
+                        )}
+                      />
+                    )}
+                  />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Controller
+                    name="techStack"
+                    control={control}
+                    defaultValue={[]}
+                    render={({ field }) => (
+                      <Autocomplete
+                        multiple
+                        freeSolo
+                        options={TECH_SUGGESTIONS}
+                        value={field.value || []}
+                        onChange={(_, value) => field.onChange(value)}
+                        renderTags={(value, getTagProps) =>
+                          value.map((option, index) => (
+                            <Chip label={option} {...getTagProps({ index })} key={option} size="small" />
+                          ))
+                        }
+                        renderInput={(params) => (
+                          <TextField {...params} label="Tech Stack" placeholder="Type and press enter" />
+                        )}
+                      />
+                    )}
+                  />
+                </Grid>
+              </Grid>
+            </Box>
+
+            <Divider />
+
+            <Box sx={{ p: 3, display: 'flex', justifyContent: 'flex-end', gap: 1.5 }}>
+              <Button variant="outlined" onClick={closeAddDrawer}>Cancel</Button>
+              <Button onClick={handleSubmit(onSubmit)} loading={submitting}>Create Project</Button>
+            </Box>
+          </Box>
+        </Drawer>
       )}
     </Box>
   );

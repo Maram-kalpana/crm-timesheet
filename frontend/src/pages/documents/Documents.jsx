@@ -77,27 +77,27 @@ const Documents = () => {
         title="Documents"
         subtitle="Employee documents and letters"
         breadcrumb={[{ label: 'Documents', path: '/documents' }]}
-        action={
-          isAdmin && (
-            <>
-              <input type="file" id="doc-upload" hidden accept=".pdf,.doc,.docx,.jpg,.png" onChange={handleUpload} />
-              <label htmlFor="doc-upload">
-                <Button component="span" startIcon={<Upload size={18} />}>Upload Document</Button>
-              </label>
-            </>
-          )
-        }
       />
 
-      <Box mb={3}>
-        <Select
-          label="Document Type"
-          value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
-          options={[{ value: '', label: 'All Types' }, ...DOC_TYPES]}
-          sx={{ minWidth: 200 }}
-        />
-      </Box>
+      <Box display="flex" gap={2} mb={3} alignItems="center" flexWrap="nowrap">
+  <Box sx={{ flex: 1, minWidth: 0 }}>
+    <Select
+      label="Document Type"
+      value={typeFilter}
+      onChange={(e) => setTypeFilter(e.target.value)}
+      options={[{ value: '', label: 'All Types' }, ...DOC_TYPES]}
+      fullWidth
+    />
+  </Box>
+  {isAdmin && (
+    <Box sx={{ flexShrink: 0 }}>
+      <input type="file" id="doc-upload" hidden accept=".pdf,.doc,.docx,.jpg,.png" onChange={handleUpload} />
+      <label htmlFor="doc-upload">
+        <Button component="span" startIcon={<Upload size={18} />}>Upload Document</Button>
+      </label>
+    </Box>
+  )}
+</Box>
 
       {!documents.length ? (
         <EmptyState icon={FileText} title="No documents" description="Upload or request documents from HR." />

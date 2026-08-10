@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Grid, Typography, Tabs, Tab, Divider,
 } from '@mui/material';
-import { employeeAPI } from '../../services/services';
+import { toast } from 'react-toastify';
+import { employeeAPI, documentAPI } from '../../services/services';
+import { useAuth } from '../../context/AuthContext';
 import {
   PageHeader, Card, Avatar, StatusBadge, Loader, DataTable, EmptyState,
 } from '../../components/ui';
 import { colors } from '../../theme';
-import { formatDate, formatCurrency, getFullName } from '../../utils/helpers';
+import { formatDate, formatCurrency, getFullName, getErrorMessage, downloadBlob } from '../../utils/helpers';
 
 const TabPanel = ({ children, value, index }) => (
   <Box hidden={value !== index} pt={3}>{value === index && children}</Box>
@@ -16,15 +18,37 @@ const TabPanel = ({ children, value, index }) => (
 
 const EmployeeProfile = () => {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const { user, isEmployee } = useAuth();
   const [employee, setEmployee] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState(0);
 
   useEffect(() => {
     employeeAPI.getById(id)
-      .then(({ data }) => setEmployee(data.data))
+      .then(({ data }) => {
+        if (isEmployee && String(data.data.id) !== String(user?.empId)) {
+          toast.error('Access denied');
+          navigate('/dashboard');
+          return;
+        }
+        setEmployee(data.data);
+      })
+      .catch((err) => {
+        toast.error(getErrorMessage(err));
+        navigate('/employees');
+      })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, isEmployee, user?.empId, navigate]);
+
+  const handleDocDownload = async (doc) => {
+    try {
+      const { data } = await documentAPI.download(doc.id);
+      downloadBlob(data, doc.title || 'document');
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
 
   if (loading) return <Loader />;
   if (!employee) return <EmptyState title="Employee not found" description="The employee you're looking for doesn't exist." />;
@@ -91,8 +115,10 @@ const EmployeeProfile = () => {
 
           <TabPanel value={tab} index={2}>
             <InfoRow label="Bank Name" value={employee.bank_name} />
+            <InfoRow label="Account Holder" value={employee.bank_account_holder} />
             <InfoRow label="Account Number" value={employee.bank_account_number} />
             <InfoRow label="IFSC Code" value={employee.bank_ifsc} />
+            <InfoRow label="Branch" value={employee.bank_branch} />
             <InfoRow label="PAN" value={employee.pan_number} />
             <InfoRow label="Aadhar" value={employee.aadhar_number} />
           </TabPanel>
@@ -108,6 +134,7 @@ const EmployeeProfile = () => {
                 <Divider sx={{ my: 2 }} />
                 <InfoRow label="PF Deduction" value={formatCurrency(employee.salary.pf_deduction)} />
                 <InfoRow label="Tax Deduction" value={formatCurrency(employee.salary.tax_deduction)} />
+                <InfoRow label="Other Deductions" value={formatCurrency(employee.salary.other_deductions)} />
               </>
             ) : <EmptyState title="No salary data" description="Salary structure not configured." />}
           </TabPanel>
@@ -155,7 +182,7 @@ const EmployeeProfile = () => {
                   <Typography fontWeight={500}>{d.title}</Typography>
                   <Typography variant="caption" color="text.secondary">{d.type.replace('_', ' ')}</Typography>
                 </Box>
-                <Typography component="a" href={d.file_url} target="_blank" color="primary" variant="body2">Download</Typography>
+                <Typography component="button" onClick={() => handleDocDownload(d)} color="primary" variant="body2" sx={{ border: 'none', bgcolor: 'transparent', cursor: 'pointer' }}>Download</Typography>
               </Box>
             ))}
             {!employee.documents?.length && <EmptyState title="No documents" />}

@@ -2,6 +2,7 @@ const express = require('express');
 const dayjs = require('dayjs');
 const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
+const { normalizeRole, canAccessEmployee, isAdmin, isHr, isTeamLead, getTeamMemberIds } = require('../middleware/rbac');
 const upload = require('../middleware/upload');
 const { exportToExcel } = require('../utils/excel');
 
@@ -49,11 +50,13 @@ router.post('/clock-in', authenticate, upload.single('selfie'), async (req, res,
   }
 });
 
-router.post('/clock-out', authenticate, async (req, res, next) => {
+router.post('/clock-out', authenticate, upload.single('selfie'), async (req, res, next) => {
   try {
     const empId = req.user.employeeId;
     const today = dayjs().format('YYYY-MM-DD');
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    const { location } = req.body;
+    const selfieUrl = req.file ? `/uploads/selfies/${req.file.filename}` : null;
 
     const [existing] = await pool.query(
       'SELECT * FROM attendance WHERE employee_id = ? AND date = ?',
@@ -72,11 +75,16 @@ router.post('/clock-out', authenticate, async (req, res, next) => {
     const workingHours = clockOut.diff(clockIn, 'minute') / 60;
 
     await pool.query(
-      'UPDATE attendance SET clock_out = ?, working_hours = ? WHERE id = ?',
-      [now, workingHours.toFixed(2), existing[0].id]
+      'UPDATE attendance SET clock_out = ?, working_hours = ?, clock_out_location = ?, clock_out_selfie_url = ? WHERE id = ?',
+      [now, workingHours.toFixed(2), location, selfieUrl, existing[0].id]
     );
 
-    res.json({ success: true, message: 'Clocked out successfully.', clockOut: now, workingHours: workingHours.toFixed(2) });
+    res.json({
+      success: true,
+      message: 'Clocked out successfully.',
+      clockOut: now,
+      workingHours: workingHours.toFixed(2),
+    });
   } catch (error) {
     next(error);
   }
@@ -98,7 +106,15 @@ router.get('/today', authenticate, async (req, res, next) => {
 
 router.get('/history', authenticate, async (req, res, next) => {
   try {
-    const empId = req.user.employeeId || req.query.employeeId;
+    let empId = req.user.employeeId;
+    if (req.query.employeeId) {
+      const targetId = Number(req.query.employeeId);
+      const allowed = await canAccessEmployee(req.user, targetId);
+      if (!allowed) {
+        return res.status(403).json({ success: false, message: 'Forbidden. Insufficient permissions.' });
+      }
+      empId = targetId;
+    }
     const { month, year, page = 1, limit = 31 } = req.query;
     const m = month || dayjs().month() + 1;
     const y = year || dayjs().year();
@@ -126,6 +142,10 @@ router.get('/history', authenticate, async (req, res, next) => {
 router.get('/calendar/:employeeId/:year/:month', authenticate, async (req, res, next) => {
   try {
     const { employeeId, year, month } = req.params;
+    const allowed = await canAccessEmployee(req.user, Number(employeeId));
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Forbidden. Insufficient permissions.' });
+    }
     const [records] = await pool.query(
       'SELECT date, status, clock_in, clock_out, working_hours FROM attendance WHERE employee_id = ? AND YEAR(date) = ? AND MONTH(date) = ?',
       [employeeId, year, month]
@@ -136,12 +156,22 @@ router.get('/calendar/:employeeId/:year/:month', authenticate, async (req, res, 
   }
 });
 
-router.get('/all', authenticate, authorize('admin', 'hr', 'manager'), async (req, res, next) => {
+router.get('/all', authenticate, authorize('admin', 'hr', 'manager', 'team_lead'), async (req, res, next) => {
   try {
     const { date, status, department, search, page = 1, limit = 20 } = req.query;
     const targetDate = date || dayjs().format('YYYY-MM-DD');
     let where = 'WHERE a.date = ?';
     const params = [targetDate];
+
+    const role = normalizeRole(req.user.role);
+    if (role === 'team_lead') {
+      const teamIds = await getTeamMemberIds(Number(req.user.employeeId));
+      const ids = [Number(req.user.employeeId), ...teamIds];
+      if (ids.length) {
+        where += ` AND a.employee_id IN (${ids.map(() => '?').join(',')})`;
+        params.push(...ids);
+      }
+    }
 
     if (status) { where += ' AND a.status = ?'; params.push(status); }
     if (department) { where += ' AND e.department_id = ?'; params.push(department); }

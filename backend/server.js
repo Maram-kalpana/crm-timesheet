@@ -15,6 +15,7 @@ const documentRoutes = require('./routes/documents');
 const notificationRoutes = require('./routes/notifications');
 const departmentRoutes = require('./routes/departments');
 const announcementRoutes = require('./routes/announcements');
+const resignationRoutes = require('./routes/resignations');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -39,6 +40,7 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/departments', departmentRoutes);
 app.use('/api/announcements', announcementRoutes);
+app.use('/api/resignations', resignationRoutes);
 
 app.use(errorHandler);
 

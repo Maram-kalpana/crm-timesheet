@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { normalizeRole } = require('./rbac');
 
 const authenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -9,6 +10,7 @@ const authenticate = (req, res, next) => {
   const token = authHeader.split(' ')[1];
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    decoded.role = normalizeRole(decoded.role);
     req.user = decoded;
     next();
   } catch (error) {
@@ -17,11 +19,13 @@ const authenticate = (req, res, next) => {
 };
 
 const authorize = (...roles) => {
+  const normalized = roles.map((r) => (r === 'manager' ? 'team_lead' : r));
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ success: false, message: 'Unauthorized.' });
     }
-    if (!roles.includes(req.user.role)) {
+    const userRole = normalizeRole(req.user.role);
+    if (!normalized.includes(userRole)) {
       return res.status(403).json({ success: false, message: 'Forbidden. Insufficient permissions.' });
     }
     next();

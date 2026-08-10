@@ -28,11 +28,11 @@ export const SetupGuard = ({ children }) => {
     return <Navigate to="/dashboard" replace />;
   }
 
-  if (needsSetup && location.pathname !== '/register') {
+  if (needsSetup && location.pathname !== '/register' && location.pathname !== '/Register') {
     return <Navigate to="/register" replace />;
   }
 
-  if (!needsSetup && location.pathname === '/register') {
+  if (!needsSetup && (location.pathname === '/register' || location.pathname === '/Register')) {
     return <Navigate to="/login" replace />;
   }
 
@@ -66,8 +66,11 @@ export const ProtectedRoute = ({ children, roles }) => {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (roles && !roles.includes(user.role)) {
-    return <Navigate to="/dashboard" replace />;
+  if (roles) {
+    const userRole = user.role === 'manager' ? 'team_lead' : user.role;
+    if (!roles.includes(userRole)) {
+      return <Navigate to="/dashboard" replace />;
+    }
   }
 
   return children;

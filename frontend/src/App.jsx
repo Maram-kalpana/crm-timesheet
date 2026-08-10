@@ -21,6 +21,8 @@ import Leave from './pages/leave/Leave';
 import Payroll from './pages/payroll/Payroll';
 import Documents from './pages/documents/Documents';
 import Notifications from './pages/notifications/Notifications';
+import Profile from './pages/profile/Profile';
+import Resignations from './pages/resignations/Resignations';
 
 function App() {
   return (
@@ -31,20 +33,27 @@ function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/register" element={<SetupGuard><PublicRoute><Register /></PublicRoute></SetupGuard>} />
+              <Route path="/Register" element={<SetupGuard><PublicRoute><Register /></PublicRoute></SetupGuard>} />
               <Route path="/login" element={<SetupGuard><PublicRoute><Login /></PublicRoute></SetupGuard>} />
               <Route path="/forgot-password" element={<PublicRoute><ForgotPassword /></PublicRoute>} />
 
               <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/attendance" element={<Attendance />} />
-                <Route path="/employees" element={<Employees />} />
+                <Route path="/employees" element={<ProtectedRoute roles={['admin', 'hr', 'team_lead']}><Employees /></ProtectedRoute>} />
                 <Route path="/employees/:id" element={<EmployeeProfile />} />
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/leave" element={<Leave />} />
                 <Route path="/payroll" element={<Payroll />} />
                 <Route path="/documents" element={<Documents />} />
                 <Route path="/notifications" element={<Notifications />} />
-                <Route path="/profile" element={<Dashboard />} />
+                <Route path="/resignations" element={<Resignations />} />
+                <Route path="/profile" element={<Profile />} />
+
+                <Route path="/admin/*" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/hr/*" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/team-lead/*" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/employee/*" element={<Navigate to="/dashboard" replace />} />
               </Route>
 
               <Route path="/" element={<SetupGuard><Navigate to="/login" replace /></SetupGuard>} />

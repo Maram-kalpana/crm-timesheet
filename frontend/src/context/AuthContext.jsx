@@ -3,6 +3,11 @@ import { authAPI } from '../services/services';
 
 const AuthContext = createContext(null);
 
+const normalizeRole = (role) => {
+  if (role === 'manager') return 'team_lead';
+  return role;
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('user');
@@ -18,8 +23,9 @@ export const AuthProvider = ({ children }) => {
     }
     try {
       const { data } = await authAPI.me();
-      setUser(data.user);
-      localStorage.setItem('user', JSON.stringify(data.user));
+      const normalized = { ...data.user, role: normalizeRole(data.user.role) };
+      setUser(normalized);
+      localStorage.setItem('user', JSON.stringify(normalized));
     } catch {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
@@ -35,17 +41,19 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (credentials) => {
     const { data } = await authAPI.login(credentials);
+    const normalized = { ...data.user, role: normalizeRole(data.user.role) };
     localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data.user));
-    setUser(data.user);
+    localStorage.setItem('user', JSON.stringify(normalized));
+    setUser(normalized);
     return data;
   };
 
   const register = async (payload) => {
     const { data } = await authAPI.register(payload);
+    const normalized = { ...data.user, role: normalizeRole(data.user.role) };
     localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data.user));
-    setUser(data.user);
+    localStorage.setItem('user', JSON.stringify(normalized));
+    setUser(normalized);
     return data;
   };
 
@@ -55,11 +63,19 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
-  const isAdmin = user?.role === 'admin' || user?.role === 'hr';
-  const isManager = user?.role === 'manager' || isAdmin;
+  const role = normalizeRole(user?.role);
+  const isAdminOnly = role === 'admin';
+  const isHr = role === 'hr';
+  const isTeamLead = role === 'team_lead';
+  const isEmployee = role === 'employee';
+  const isAdmin = isAdminOnly || isHr;
+  const isManager = isTeamLead || isAdminOnly;
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, fetchUser, isAdmin, isManager }}>
+    <AuthContext.Provider value={{
+      user, loading, login, register, logout, fetchUser,
+      isAdmin, isAdminOnly, isHr, isTeamLead, isEmployee, isManager,
+    }}>
       {children}
     </AuthContext.Provider>
   );

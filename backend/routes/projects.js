@@ -1,8 +1,36 @@
 const express = require('express');
 const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
+const { normalizeRole, isAdmin, isHr, isTeamLead, getTeamMemberIds } = require('../middleware/rbac');
+const { createNotification } = require('./notifications');
 
 const router = express.Router();
+
+const canAccessProject = async (user, projectId) => {
+  const role = normalizeRole(user.role);
+  if (role === 'admin' || role === 'hr') return true;
+
+  const [membership] = await pool.query(
+    'SELECT 1 FROM project_members WHERE project_id = ? AND employee_id = ?',
+    [projectId, user.employeeId]
+  );
+  if (membership.length) return true;
+
+  if (role === 'team_lead') {
+    const [project] = await pool.query('SELECT manager_id FROM projects WHERE id = ?', [projectId]);
+    if (project.length && Number(project[0].manager_id) === Number(user.employeeId)) return true;
+    const teamIds = await getTeamMemberIds(Number(user.employeeId));
+    if (teamIds.length) {
+      const [teamOnProject] = await pool.query(
+        `SELECT 1 FROM project_members WHERE project_id = ? AND employee_id IN (${teamIds.map(() => '?').join(',')})`,
+        [projectId, ...teamIds]
+      );
+      if (teamOnProject.length) return true;
+    }
+  }
+
+  return false;
+};
 
 router.get('/', authenticate, async (req, res, next) => {
   try {
@@ -13,16 +41,21 @@ router.get('/', authenticate, async (req, res, next) => {
     if (status) { where += ' AND p.status = ?'; params.push(status); }
     if (search) { where += ' AND p.name LIKE ?'; params.push(`%${search}%`); }
 
-    if (req.user.role === 'employee') {
-      where += ' AND pm.employee_id = ?';
-      params.push(req.user.employeeId);
+    const role = normalizeRole(req.user.role);
+    const needsMemberJoin = role === 'employee' || role === 'team_lead';
+    const joinClause = needsMemberJoin ? 'LEFT JOIN project_members pm ON p.id = pm.project_id' : '';
+
+    if (role === 'employee') {
+      where += ' AND (pm.employee_id = ? OR p.manager_id = ?)';
+      params.push(req.user.employeeId, req.user.employeeId);
+    } else if (role === 'team_lead') {
+      const teamIds = await getTeamMemberIds(Number(req.user.employeeId));
+      const ids = [Number(req.user.employeeId), ...teamIds];
+      where += ` AND (p.manager_id = ? OR pm.employee_id IN (${ids.map(() => '?').join(',')}))`;
+      params.push(req.user.employeeId, ...ids);
     }
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    const joinClause = req.user.role === 'employee'
-      ? 'JOIN project_members pm ON p.id = pm.project_id'
-      : '';
-
     const [projects] = await pool.query(`
       SELECT DISTINCT p.*, CONCAT(e.first_name, ' ', e.last_name) as manager_name,
         (SELECT COUNT(*) FROM project_members WHERE project_id = p.id) as member_count,
@@ -36,7 +69,12 @@ router.get('/', authenticate, async (req, res, next) => {
       LIMIT ? OFFSET ?
     `, [...params, parseInt(limit), offset]);
 
-    res.json({ success: true, data: projects });
+    const data = projects.map((p) => ({
+      ...p,
+      tech_stack: typeof p.tech_stack === 'string' ? JSON.parse(p.tech_stack) : (p.tech_stack || []),
+    }));
+
+    res.json({ success: true, data });
   } catch (error) {
     next(error);
   }
@@ -44,6 +82,12 @@ router.get('/', authenticate, async (req, res, next) => {
 
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
+    const projectId = Number(req.params.id);
+    const allowed = await canAccessProject(req.user, projectId);
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Forbidden. Insufficient permissions.' });
+    }
+
     const [projects] = await pool.query(`
       SELECT p.*, CONCAT(e.first_name, ' ', e.last_name) as manager_name
       FROM projects p LEFT JOIN employees e ON p.manager_id = e.id WHERE p.id = ?
@@ -77,7 +121,12 @@ router.get('/:id', authenticate, async (req, res, next) => {
       WHERE u.project_id = ? ORDER BY u.update_date DESC LIMIT 20
     `, [req.params.id]);
 
-    res.json({ success: true, data: { ...projects[0], members, tasks, comments, updates } });
+    const project = {
+      ...projects[0],
+      tech_stack: typeof projects[0].tech_stack === 'string' ? JSON.parse(projects[0].tech_stack) : (projects[0].tech_stack || []),
+    };
+
+    res.json({ success: true, data: { ...project, members, tasks, comments, updates } });
   } catch (error) {
     next(error);
   }
@@ -85,15 +134,40 @@ router.get('/:id', authenticate, async (req, res, next) => {
 
 router.post('/', authenticate, authorize('admin', 'hr', 'manager'), async (req, res, next) => {
   try {
-    const { name, description, status, priority, startDate, endDate, managerId, memberIds } = req.body;
+    const { name, description, status, priority, startDate, endDate, teamLeadId, memberIds, techStack } = req.body;
+
+    if (!teamLeadId) {
+      return res.status(400).json({ success: false, message: 'Team lead is required.' });
+    }
+
     const [result] = await pool.query(
-      'INSERT INTO projects (name, description, status, priority, start_date, end_date, manager_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [name, description, status || 'planning', priority || 'medium', startDate, endDate, managerId, req.user.employeeId]
+      'INSERT INTO projects (name, description, status, priority, start_date, end_date, manager_id, tech_stack, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [name, description, status || 'planning', priority || 'medium', startDate, endDate, teamLeadId, JSON.stringify(techStack || []), req.user.employeeId]
     );
 
-    if (memberIds && memberIds.length) {
-      const values = memberIds.map((id) => [result.insertId, id]);
-      await pool.query('INSERT INTO project_members (project_id, employee_id) VALUES ?', [values]);
+    const memberOnlyIds = (memberIds || []).filter((id) => String(id) !== String(teamLeadId));
+const allMemberIds = Array.from(new Set([teamLeadId, ...memberOnlyIds]));
+const values = allMemberIds.map((id) => [result.insertId, id]);
+await pool.query('INSERT INTO project_members (project_id, employee_id) VALUES ?', [values]);
+
+    // Notify team lead + all members about the new assignment
+    const allAssignedIds = Array.from(new Set([teamLeadId, ...memberOnlyIds]));
+    const [employeeUsers] = await pool.query(
+      `SELECT id, user_id FROM employees WHERE id IN (${allAssignedIds.map(() => '?').join(',')})`,
+      allAssignedIds
+    );
+
+    for (const emp of employeeUsers) {
+      const isLead = String(emp.id) === String(teamLeadId);
+      await createNotification(
+        emp.user_id,
+        isLead ? 'Assigned as Team Lead' : 'Added to New Project',
+        isLead
+          ? `You've been assigned as Team Lead for "${name}" (${startDate} to ${endDate}).`
+          : `You've been added to the project "${name}" (${startDate} to ${endDate}).`,
+        'project',
+        '/projects'
+      );
     }
 
     res.status(201).json({ success: true, message: 'Project created.', id: result.insertId });
@@ -104,10 +178,10 @@ router.post('/', authenticate, authorize('admin', 'hr', 'manager'), async (req, 
 
 router.put('/:id', authenticate, authorize('admin', 'hr', 'manager'), async (req, res, next) => {
   try {
-    const { name, description, status, priority, startDate, endDate, completionPercentage, managerId } = req.body;
+    const { name, description, status, priority, startDate, endDate, completionPercentage, teamLeadId, techStack } = req.body;
     await pool.query(
-      'UPDATE projects SET name=?, description=?, status=?, priority=?, start_date=?, end_date=?, completion_percentage=?, manager_id=? WHERE id=?',
-      [name, description, status, priority, startDate, endDate, completionPercentage, managerId, req.params.id]
+      'UPDATE projects SET name=?, description=?, status=?, priority=?, start_date=?, end_date=?, completion_percentage=?, manager_id=?, tech_stack=? WHERE id=?',
+      [name, description, status, priority, startDate, endDate, completionPercentage, teamLeadId, JSON.stringify(techStack || []), req.params.id]
     );
     res.json({ success: true, message: 'Project updated.' });
   } catch (error) {
@@ -117,6 +191,10 @@ router.put('/:id', authenticate, authorize('admin', 'hr', 'manager'), async (req
 
 router.post('/:id/tasks', authenticate, async (req, res, next) => {
   try {
+    const allowed = await canAccessProject(req.user, Number(req.params.id));
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
     const { title, description, status, priority, assignedTo, dueDate } = req.body;
     const [result] = await pool.query(
       'INSERT INTO project_tasks (project_id, title, description, status, priority, assigned_to, due_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -130,6 +208,14 @@ router.post('/:id/tasks', authenticate, async (req, res, next) => {
 
 router.put('/tasks/:taskId', authenticate, async (req, res, next) => {
   try {
+    const [task] = await pool.query('SELECT project_id FROM project_tasks WHERE id = ?', [req.params.taskId]);
+    if (!task.length) {
+      return res.status(404).json({ success: false, message: 'Task not found.' });
+    }
+    const allowed = await canAccessProject(req.user, task[0].project_id);
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
     const { title, description, status, priority, assignedTo, dueDate, completionPercentage } = req.body;
     await pool.query(
       'UPDATE project_tasks SET title=?, description=?, status=?, priority=?, assigned_to=?, due_date=?, completion_percentage=? WHERE id=?',
@@ -143,6 +229,10 @@ router.put('/tasks/:taskId', authenticate, async (req, res, next) => {
 
 router.post('/:id/comments', authenticate, async (req, res, next) => {
   try {
+    const allowed = await canAccessProject(req.user, Number(req.params.id));
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
     const { comment, taskId } = req.body;
     const [result] = await pool.query(
       'INSERT INTO project_comments (project_id, task_id, employee_id, comment) VALUES (?, ?, ?, ?)',
@@ -156,11 +246,51 @@ router.post('/:id/comments', authenticate, async (req, res, next) => {
 
 router.post('/:id/updates', authenticate, async (req, res, next) => {
   try {
-    const { updateText, hoursSpent, updateDate } = req.body;
+    const allowed = await canAccessProject(req.user, Number(req.params.id));
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
+    const { updateText, hoursSpent, updateDate, gitRepo, credentials, status } = req.body;
+
+    if (!updateText) {
+      return res.status(400).json({ success: false, message: 'Work done is required.' });
+    }
+
+    const finalDate = updateDate || new Date().toISOString().split('T')[0];
+
     const [result] = await pool.query(
-      'INSERT INTO project_updates (project_id, employee_id, update_text, hours_spent, update_date) VALUES (?, ?, ?, ?, ?)',
-      [req.params.id, req.user.employeeId, updateText, hoursSpent || 0, updateDate || new Date().toISOString().split('T')[0]]
+      'INSERT INTO project_updates (project_id, employee_id, update_text, git_repo, credentials, status, hours_spent, update_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [req.params.id, req.user.employeeId, updateText, gitRepo || null, credentials || null, status || null, hoursSpent || 0, finalDate]
     );
+
+    // Notify admins/HR and the project's team lead about this update
+    const [projectRows] = await pool.query('SELECT name, manager_id FROM projects WHERE id = ?', [req.params.id]);
+    const projectName = projectRows[0]?.name || 'a project';
+    const managerId = projectRows[0]?.manager_id;
+
+    const recipientQuery = managerId
+      ? `SELECT DISTINCT u.id as user_id FROM users u LEFT JOIN employees e ON e.user_id = u.id WHERE u.role IN ('admin','hr') OR e.id = ?`
+      : `SELECT DISTINCT u.id as user_id FROM users u WHERE u.role IN ('admin','hr')`;
+    const [recipients] = await pool.query(recipientQuery, managerId ? [managerId] : []);
+
+    const [authorRows] = await pool.query(
+      "SELECT CONCAT(first_name, ' ', last_name) as name FROM employees WHERE id = ?",
+      [req.user.employeeId]
+    );
+    const authorName = authorRows[0]?.name || 'An employee';
+    const summary = updateText.length > 100 ? `${updateText.slice(0, 100)}…` : updateText;
+
+    for (const r of recipients) {
+      if (r.user_id === req.user.id) continue; // don't notify the author about their own update
+      await createNotification(
+        r.user_id,
+        `New Update on ${projectName}`,
+        `${authorName} logged an update on ${finalDate}: ${summary}`,
+        'project',
+        '/projects'
+      );
+    }
+
     res.status(201).json({ success: true, id: result.insertId });
   } catch (error) {
     next(error);

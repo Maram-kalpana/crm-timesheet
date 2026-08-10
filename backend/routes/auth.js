@@ -4,7 +4,8 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const pool = require('../config/db');
 const { authenticate } = require('../middleware/auth');
-const { sendEmail } = require('../utils/email');
+const { normalizeRole, generateEmployeeCode } = require('../middleware/rbac');
+const { sendEmail } = require('../utils/emailService');
 
 const router = express.Router();
 
@@ -29,9 +30,11 @@ router.post('/register', async (req, res, next) => {
 
     const { firstName, lastName, email, password, employeeId, phone, companyName } = req.body;
 
-    if (!firstName || !lastName || !email || !password || !employeeId) {
+    if (!firstName || !lastName || !email || !password) {
       return res.status(400).json({ success: false, message: 'All required fields must be filled.' });
     }
+
+    const adminCode = employeeId || await generateEmployeeCode('admin');
 
     if (password.length < 6) {
       return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
@@ -63,12 +66,12 @@ router.post('/register', async (req, res, next) => {
 
     const [userResult] = await connection.query(
       'INSERT INTO users (employee_id, email, password, role) VALUES (?, ?, ?, ?)',
-      [employeeId, email, hashedPassword, 'admin']
+      [adminCode, email, hashedPassword, 'admin']
     );
 
     const [empResult] = await connection.query(`
-      INSERT INTO employees (user_id, first_name, last_name, phone, department_id, designation, joining_date, employment_type)
-      VALUES (?, ?, ?, ?, ?, ?, CURDATE(), 'full-time')
+      INSERT INTO employees (user_id, first_name, last_name, phone, department_id, designation, joining_date, employment_type, employment_status)
+      VALUES (?, ?, ?, ?, ?, ?, CURDATE(), 'full-time', 'ACTIVE')
     `, [userResult.insertId, firstName, lastName, phone || null, departmentId, 'System Administrator']);
 
     const year = new Date().getFullYear();
@@ -93,7 +96,7 @@ router.post('/register', async (req, res, next) => {
         id: userResult.insertId,
         email,
         role: 'admin',
-        employeeId,
+        employeeId: adminCode,
         empId: empResult.insertId,
         firstName,
         lastName,
@@ -121,7 +124,7 @@ router.post('/login', async (req, res, next) => {
     }
 
     const [users] = await pool.query(
-      `SELECT u.*, e.id as emp_id, e.first_name, e.last_name, e.avatar, e.department_id, e.designation
+      `SELECT u.*, e.id as emp_id, e.first_name, e.last_name, e.avatar, e.department_id, e.designation, e.employment_status
        FROM users u LEFT JOIN employees e ON u.id = e.user_id WHERE u.email = ? AND u.is_active = TRUE`,
       [email]
     );
@@ -131,14 +134,19 @@ router.post('/login', async (req, res, next) => {
     }
 
     const user = users[0];
+    if (user.employment_status && !['ACTIVE', null].includes(user.employment_status) && user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Account is inactive. Contact HR.' });
+    }
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
 
+    const normalizedRole = normalizeRole(user.role);
     const expiresIn = rememberMe ? '30d' : (process.env.JWT_EXPIRES_IN || '7d');
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, employeeId: user.emp_id },
+      { id: user.id, email: user.email, role: normalizedRole, employeeId: user.emp_id },
       process.env.JWT_SECRET,
       { expiresIn }
     );
@@ -149,7 +157,7 @@ router.post('/login', async (req, res, next) => {
       user: {
         id: user.id,
         email: user.email,
-        role: user.role,
+        role: normalizedRole,
         employeeId: user.employee_id,
         empId: user.emp_id,
         firstName: user.first_name,
@@ -186,7 +194,7 @@ router.get('/me', authenticate, async (req, res, next) => {
       user: {
         id: user.id,
         email: user.email,
-        role: user.role,
+        role: normalizeRole(user.role),
         employeeId: user.employee_id,
         empId: user.emp_id,
         firstName: user.first_name,

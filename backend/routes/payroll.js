@@ -3,7 +3,10 @@ const path = require('path');
 const fs = require('fs');
 const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
+const { normalizeRole, canAccessEmployee, isAdmin, isHr } = require('../middleware/rbac');
 const { generatePayslipPDF } = require('../utils/pdf');
+const { sendPayslipNotification } = require('../utils/emailService');
+const { notifyEmployeeByEmpId } = require('../utils/notify');
 
 const router = express.Router();
 
@@ -62,8 +65,12 @@ router.get('/:id', authenticate, async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Payslip not found.' });
     }
 
-    if (req.user.role === 'employee' && payslips[0].employee_id !== req.user.employeeId) {
+    const role = normalizeRole(req.user.role);
+    if ((role === 'employee' || role === 'team_lead') && payslips[0].employee_id !== req.user.employeeId) {
       return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+    if (role === 'hr' && payslips[0].employee_id !== req.user.employeeId) {
+      // HR can view all payslips
     }
 
     res.json({ success: true, data: payslips[0] });
@@ -72,7 +79,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
   }
 });
 
-router.post('/generate', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
+router.post('/generate', authenticate, authorize('admin'), async (req, res, next) => {
   try {
     const { month, year } = req.body;
     const m = month || new Date().getMonth() + 1;
@@ -99,6 +106,19 @@ router.post('/generate', authenticate, authorize('admin', 'hr'), async (req, res
         ON DUPLICATE KEY UPDATE gross_salary=VALUES(gross_salary), net_salary=VALUES(net_salary), status='generated', generated_at=NOW()
       `, [emp.id, m, y, emp.basic_salary, emp.hra, emp.transport_allowance, emp.medical_allowance, emp.special_allowance, gross, emp.pf_deduction, emp.tax_deduction, emp.other_deductions, net]);
       generated++;
+
+      const [empInfo] = await pool.query(`
+        SELECT e.first_name, e.last_name, u.email FROM employees e JOIN users u ON e.user_id = u.id WHERE e.id = ?
+      `, [emp.id]);
+      if (empInfo.length) {
+        await notifyEmployeeByEmpId(emp.id, 'Payslip Available', `Your payslip for ${m}/${y} is ready.`, 'info', '/payroll');
+        await sendPayslipNotification({
+          to: empInfo[0].email,
+          name: `${empInfo[0].first_name} ${empInfo[0].last_name}`,
+          month: m,
+          year: y,
+        });
+      }
     }
 
     res.json({ success: true, message: `Generated ${generated} payslips.` });
@@ -115,7 +135,8 @@ router.get('/:id/download', authenticate, async (req, res, next) => {
     }
 
     const payslip = payslips[0];
-    if (req.user.role === 'employee' && payslip.employee_id !== req.user.employeeId) {
+    const role = normalizeRole(req.user.role);
+    if ((role === 'employee' || role === 'team_lead') && payslip.employee_id !== req.user.employeeId) {
       return res.status(403).json({ success: false, message: 'Access denied.' });
     }
 
@@ -139,12 +160,27 @@ router.get('/:id/download', authenticate, async (req, res, next) => {
 
 router.put('/salary/:employeeId', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
   try {
-    const { basicSalary, hra, transportAllowance, medicalAllowance, specialAllowance, pfDeduction, taxDeduction, otherDeductions, effectiveFrom } = req.body;
+    const {
+      basicSalary, hra, transportAllowance, medicalAllowance, specialAllowance,
+      allowances, pfDeduction, taxDeduction, otherDeductions, deductions, effectiveFrom,
+    } = req.body;
+    const effective = effectiveFrom || new Date().toISOString().split('T')[0];
     await pool.query(`
       INSERT INTO salary_structures (employee_id, basic_salary, hra, transport_allowance, medical_allowance,
         special_allowance, pf_deduction, tax_deduction, other_deductions, effective_from)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [req.params.employeeId, basicSalary, hra, transportAllowance, medicalAllowance, specialAllowance, pfDeduction, taxDeduction, otherDeductions, effectiveFrom]);
+    `, [
+      req.params.employeeId,
+      Number(basicSalary) || 0,
+      Number(hra) || 0,
+      Number(transportAllowance) || 0,
+      Number(medicalAllowance) || 0,
+      Number(specialAllowance ?? allowances) || 0,
+      Number(pfDeduction) || 0,
+      Number(taxDeduction) || 0,
+      Number(otherDeductions ?? deductions) || 0,
+      effective,
+    ]);
     res.json({ success: true, message: 'Salary structure updated.' });
   } catch (error) {
     next(error);

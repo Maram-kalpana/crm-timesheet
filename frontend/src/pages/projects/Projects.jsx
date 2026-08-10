@@ -5,13 +5,13 @@ import {
   Autocomplete, TextField, Chip, Drawer, IconButton, Divider,
   Select, MenuItem, FormControl, InputLabel, FormHelperText,
 } from '@mui/material';
-import { LayoutGrid, List, Plus, X } from 'lucide-react';
+import { LayoutGrid, List, Plus, X, Upload, FileText, Download, Trash2 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useForm, Controller } from 'react-hook-form';
 import { useAuth } from '../../context/AuthContext';
-import { projectAPI, employeeAPI } from '../../services/services';
+import { projectAPI, employeeAPI, documentAPI } from '../../services/services';
 import {
-  PageHeader, Card, Button, SearchBar, StatusBadge, Loader, EmptyState, Input,
+  PageHeader, Card, Button, SearchBar, StatusBadge, Loader, EmptyState, Input, ConfirmDialog,
 } from '../../components/ui';
 import { colors } from '../../theme';
 import { getErrorMessage, getFullName } from '../../utils/helpers';
@@ -53,7 +53,7 @@ const DetailRow = ({ label, value }) => (
 );
 
 const Projects = () => {
-  const { isAdmin } = useAuth();
+  const { isAdminOnly } = useAuth();
   const [projects, setProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -65,6 +65,9 @@ const Projects = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const { register, handleSubmit, reset, control, formState: { errors } } = useForm();
+
+  // --- Initial documentation files for Add Project ---
+  const [pendingDocs, setPendingDocs] = useState([]);
 
   // --- Add Update drawer state ---
   const [updateDrawerOpen, setUpdateDrawerOpen] = useState(false);
@@ -85,6 +88,11 @@ const Projects = () => {
     },
   });
 
+  // --- Project documents ---
+  const [projectDocs, setProjectDocs] = useState([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [docDeleteId, setDocDeleteId] = useState(null);
+
   useEffect(() => {
     projectAPI.getAll({ search })
       .then(({ data }) => setProjects(data.data))
@@ -93,22 +101,35 @@ const Projects = () => {
   }, [search]);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdminOnly) return;
     employeeAPI.getAll({ limit: 100 })
       .then(({ data }) => setEmployees(data.data || []))
       .catch(() => {});
-  }, [isAdmin]);
+  }, [isAdminOnly]);
 
   const employeeOptions = employees.map((e) => ({
     id: e.id,
     label: `${getFullName(e.first_name, e.last_name)}${e.designation ? ` — ${e.designation}` : ''}`,
   }));
 
+  const fetchProjectDocs = async (projectId) => {
+    setDocsLoading(true);
+    try {
+      const { data } = await documentAPI.getAll({ projectId });
+      setProjectDocs(data.data || []);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setDocsLoading(false);
+    }
+  };
+
   const loadProject = async (id) => {
     try {
       const { data } = await projectAPI.getById(id);
       setSelectedProject(data.data);
       setView('kanban');
+      fetchProjectDocs(id);
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -126,11 +147,21 @@ const Projects = () => {
 
   const openAddDrawer = () => {
     reset();
+    setPendingDocs([]);
     setDrawerOpen(true);
   };
 
   const closeAddDrawer = () => {
     setDrawerOpen(false);
+  };
+
+  const handlePendingDocSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    setPendingDocs((prev) => [...prev, ...files]);
+  };
+
+  const removePendingDoc = (index) => {
+    setPendingDocs((prev) => prev.filter((_, i) => i !== index));
   };
 
   const onSubmit = async (formData) => {
@@ -144,7 +175,7 @@ const Projects = () => {
         .map((opt) => opt.id)
         .filter((id) => id !== formData.teamLead.id);
 
-      await projectAPI.create({
+      const { data: created } = await projectAPI.create({
         name: formData.name,
         description: formData.description || '',
         startDate: formData.startDate,
@@ -154,9 +185,23 @@ const Projects = () => {
         techStack: formData.techStack || [],
       });
 
+      const newProjectId = created?.id;
+
+      if (newProjectId && pendingDocs.length) {
+        for (const file of pendingDocs) {
+          const fd = new FormData();
+          fd.append('document', file);
+          fd.append('projectId', newProjectId);
+          fd.append('type', 'other');
+          fd.append('title', file.name);
+          await documentAPI.upload(fd);
+        }
+      }
+
       toast.success('Project created successfully');
       closeAddDrawer();
       reset();
+      setPendingDocs([]);
       setLoading(true);
       const { data } = await projectAPI.getAll({ search });
       setProjects(data.data);
@@ -196,7 +241,7 @@ const Projects = () => {
         status: formData.status,
       });
 
-      toast.success('Update added successfully');
+      toast.success('Update added — admin and team lead have been notified');
       closeAddUpdateDrawer();
       await refreshSelectedProject();
     } catch (error) {
@@ -204,6 +249,35 @@ const Projects = () => {
     } finally {
       setSubmittingUpdate(false);
     }
+  };
+
+  // --- Project document handlers ---
+  const handleProjectDocUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedProject) return;
+    const fd = new FormData();
+    fd.append('document', file);
+    fd.append('projectId', selectedProject.id);
+    fd.append('type', 'other');
+    fd.append('title', file.name);
+    try {
+      await documentAPI.upload(fd);
+      toast.success('Document uploaded');
+      fetchProjectDocs(selectedProject.id);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
+  const handleProjectDocDelete = async (id) => {
+    try {
+      await documentAPI.delete(id);
+      toast.success('Document deleted');
+      fetchProjectDocs(selectedProject.id);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+    setDocDeleteId(null);
   };
 
   if (loading) return <Loader />;
@@ -331,6 +405,59 @@ const Projects = () => {
               {!selectedProject.comments?.length && <Typography color="text.secondary" variant="body2">No comments yet</Typography>}
             </Card>
           </Grid>
+
+          <Grid size={{ xs: 12 }}>
+            <Card
+              title="Documents"
+              action={
+                isAdminOnly && (
+                  <>
+                    <input type="file" id="project-doc-upload" hidden onChange={handleProjectDocUpload} />
+                    <label htmlFor="project-doc-upload">
+                      <Button component="span" size="small" startIcon={<Upload size={16} />}>Upload</Button>
+                    </label>
+                  </>
+                )
+              }
+            >
+              {docsLoading ? (
+                <Typography variant="body2" color="text.secondary">Loading documents…</Typography>
+              ) : !projectDocs.length ? (
+                <Typography variant="body2" color="text.secondary">No documents uploaded yet.</Typography>
+              ) : (
+                <Grid container spacing={2}>
+                  {projectDocs.map((doc) => (
+                    <Grid key={doc.id} size={{ xs: 12, sm: 6, md: 4 }}>
+                      <Box
+                        display="flex"
+                        alignItems="center"
+                        gap={1.5}
+                        p={1.5}
+                        border={`1px solid ${colors.border}`}
+                        borderRadius={2}
+                      >
+                        <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: `${colors.primary}12`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <FileText size={18} color={colors.primary} />
+                        </Box>
+                        <Box flex={1} minWidth={0}>
+                          <Typography variant="body2" fontWeight={500} noWrap>{doc.title}</Typography>
+                          <Typography variant="caption" color="text.secondary">{formatDate(doc.created_at)}</Typography>
+                        </Box>
+                        <IconButton size="small" component="a" href={doc.file_url} target="_blank">
+                          <Download size={16} />
+                        </IconButton>
+                        {isAdminOnly && (
+                          <IconButton size="small" color="error" onClick={() => setDocDeleteId(doc.id)}>
+                            <Trash2 size={16} />
+                          </IconButton>
+                        )}
+                      </Box>
+                    </Grid>
+                  ))}
+                </Grid>
+              )}
+            </Card>
+          </Grid>
         </Grid>
 
         {/* Add Update Drawer */}
@@ -432,6 +559,16 @@ const Projects = () => {
             </Box>
           </Box>
         </Drawer>
+
+        <ConfirmDialog
+          open={!!docDeleteId}
+          onClose={() => setDocDeleteId(null)}
+          onConfirm={() => handleProjectDocDelete(docDeleteId)}
+          title="Delete Document"
+          message="Are you sure you want to delete this document?"
+          confirmLabel="Delete"
+          danger
+        />
       </Box>
     );
   }
@@ -448,7 +585,7 @@ const Projects = () => {
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search projects..." fullWidth />
         </Box>
-        {isAdmin && (
+        {isAdminOnly && (
           <Button startIcon={<Plus size={18} />} onClick={openAddDrawer} sx={{ flexShrink: 0 }}>
             Add Project
           </Button>
@@ -477,7 +614,7 @@ const Projects = () => {
         </Grid>
       )}
 
-      {isAdmin && (
+      {isAdminOnly && (
         <Drawer
           anchor="right"
           open={drawerOpen}
@@ -604,6 +741,37 @@ const Projects = () => {
                       />
                     )}
                   />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Typography variant="body2" fontWeight={500} mb={1}>Project Documentation (optional)</Typography>
+                  <input type="file" id="new-project-docs" hidden multiple onChange={handlePendingDocSelect} />
+                  <label htmlFor="new-project-docs">
+                    <Button component="span" variant="outlined" startIcon={<Upload size={16} />} size="small">
+                      Add Files
+                    </Button>
+                  </label>
+                  <Box mt={1} display="flex" flexDirection="column" gap={1}>
+                    {pendingDocs.map((file, index) => (
+                      <Box
+                        key={index}
+                        display="flex"
+                        alignItems="center"
+                        justifyContent="space-between"
+                        p={1}
+                        border={`1px solid ${colors.border}`}
+                        borderRadius={2}
+                      >
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <FileText size={16} />
+                          <Typography variant="body2" noWrap>{file.name}</Typography>
+                        </Box>
+                        <IconButton size="small" color="error" onClick={() => removePendingDoc(index)}>
+                          <X size={14} />
+                        </IconButton>
+                      </Box>
+                    ))}
+                  </Box>
                 </Grid>
               </Grid>
             </Box>

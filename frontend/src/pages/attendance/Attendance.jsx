@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Grid, Box, Typography, Chip } from '@mui/material';
-import { LogIn, LogOut, MapPin, Clock, Download } from 'lucide-react';
+import { LogIn, LogOut, MapPin, Download, ImageOff } from 'lucide-react';
 import { toast } from 'react-toastify';
 import dayjs from 'dayjs';
 import { useAuth } from '../../context/AuthContext';
@@ -10,6 +10,7 @@ import {
 } from '../../components/ui';
 import { colors } from '../../theme';
 import { formatDate, calculateWorkingTime, getErrorMessage, downloadBlob, monthNames } from '../../utils/helpers';
+import { getFileUrl, getMapsUrl } from '../../utils/fileUrl';
 
 const getLocationString = () =>
   new Promise((resolve, reject) => {
@@ -27,8 +28,54 @@ const getLocationString = () =>
     );
   });
 
+const LocationCell = ({ location }) => {
+  const mapsUrl = getMapsUrl(location);
+  if (!location) return <Typography variant="caption" color="text.secondary">—</Typography>;
+  return mapsUrl ? (
+    <Box
+      component="a"
+      href={mapsUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: colors.primary, textDecoration: 'none' }}
+    >
+      <MapPin size={14} />
+      <Typography variant="caption">View</Typography>
+    </Box>
+  ) : (
+    <Typography variant="caption">{location}</Typography>
+  );
+};
+
+const PhotoCell = ({ selfieUrl }) => {
+  const url = getFileUrl(selfieUrl);
+  if (!url) {
+    return (
+      <Box sx={{ width: 32, height: 32, borderRadius: 1, bgcolor: colors.background, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <ImageOff size={14} color={colors.text.secondary} />
+      </Box>
+    );
+  }
+  return (
+    <Box
+      component="a"
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <Box
+        component="img"
+        src={url}
+        alt="Selfie"
+        sx={{ width: 32, height: 32, borderRadius: 1, objectFit: 'cover', border: `1px solid ${colors.border}` }}
+      />
+    </Box>
+  );
+};
+
 const Attendance = () => {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isTeamLead } = useAuth();
+  const canViewOrg = isAdmin || isTeamLead;
   const [today, setToday] = useState(null);
   const [history, setHistory] = useState([]);
   const [allRecords, setAllRecords] = useState([]);
@@ -52,7 +99,7 @@ const Attendance = () => {
       const todayRes = await attendanceAPI.today();
       setToday(todayRes.data.data);
 
-      if (isAdmin) {
+      if (canViewOrg) {
         const allRes = await attendanceAPI.getAll({ search, status: statusFilter, month, year });
         setAllRecords(allRes.data.data || []);
       } else {
@@ -66,7 +113,7 @@ const Attendance = () => {
     }
   };
 
-  useEffect(() => { fetchData(); }, [isAdmin, search, statusFilter, month, year]);
+  useEffect(() => { fetchData(); }, [canViewOrg, search, statusFilter, month, year]);
   useEffect(() => { setPage(1); }, [search, statusFilter, month, year]);
 
   useEffect(() => {
@@ -124,8 +171,12 @@ const Attendance = () => {
 
   const columns = [
     { field: 'date', headerName: 'Date', renderCell: ({ value }) => formatDate(value) },
+    { field: 'selfie_url', headerName: 'In Photo', renderCell: ({ value }) => <PhotoCell selfieUrl={value} /> },
+    { field: 'location', headerName: 'In Location', renderCell: ({ value }) => <LocationCell location={value} /> },
     { field: 'clock_in', headerName: 'Clock In', renderCell: ({ value }) => value ? formatDate(value, 'hh:mm A') : '—' },
     { field: 'clock_out', headerName: 'Clock Out', renderCell: ({ value }) => value ? formatDate(value, 'hh:mm A') : '—' },
+    { field: 'clock_out_selfie_url', headerName: 'Out Photo', renderCell: ({ value }) => <PhotoCell selfieUrl={value} /> },
+    { field: 'clock_out_location', headerName: 'Out Location', renderCell: ({ value }) => <LocationCell location={value} /> },
     { field: 'working_hours', headerName: 'Hours', renderCell: ({ value }) => value ? `${value}h` : '—' },
     { field: 'status', headerName: 'Status', renderCell: ({ value }) => <StatusBadge status={value} /> },
   ];
@@ -141,8 +192,12 @@ const Attendance = () => {
 
   const canClockIn = !today?.clock_in;
   const canClockOut = today?.clock_in && !today?.clock_out;
+  const todayInSelfieUrl = getFileUrl(today?.selfie_url);
+  const todayInMapsUrl = getMapsUrl(today?.location);
+  const todayOutSelfieUrl = getFileUrl(today?.clock_out_selfie_url);
+  const todayOutMapsUrl = getMapsUrl(today?.clock_out_location);
 
-  const rows = isAdmin ? allRecords : history;
+  const rows = canViewOrg ? allRecords : history;
   const paginatedRows = rows.slice((page - 1) * limit, page * limit);
 
   return (
@@ -166,10 +221,64 @@ const Attendance = () => {
               </Grid>
               <Grid size={{ xs: 12, md: 6 }}>
                 <Box display="flex" flexDirection="column" gap={2}>
-                  <Box display="flex" alignItems="center" gap={1}>
-                    <MapPin size={18} color={colors.text.secondary} />
-                    <Typography variant="body2">{today?.location || 'Not checked in'}</Typography>
-                  </Box>
+                  {todayInSelfieUrl && (
+                    <Box display="flex" alignItems="center" gap={1.5}>
+                      <Box
+                        component="img"
+                        src={todayInSelfieUrl}
+                        alt="Clock-in selfie"
+                        sx={{ width: 48, height: 48, borderRadius: 2, objectFit: 'cover', border: `1px solid ${colors.border}` }}
+                      />
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" display="block">Clocked in</Typography>
+                        {todayInMapsUrl && (
+                          <Box
+                            component="a"
+                            href={todayInMapsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: colors.primary, textDecoration: 'none' }}
+                          >
+                            <MapPin size={14} />
+                            <Typography variant="caption">View location</Typography>
+                          </Box>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+                  {!todayInSelfieUrl && (
+                    <Box display="flex" alignItems="center" gap={1}>
+                      <MapPin size={18} color={colors.text.secondary} />
+                      <Typography variant="body2">Not checked in</Typography>
+                    </Box>
+                  )}
+
+                  {todayOutSelfieUrl && (
+                    <Box display="flex" alignItems="center" gap={1.5}>
+                      <Box
+                        component="img"
+                        src={todayOutSelfieUrl}
+                        alt="Clock-out selfie"
+                        sx={{ width: 48, height: 48, borderRadius: 2, objectFit: 'cover', border: `1px solid ${colors.border}` }}
+                      />
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" display="block">Clocked out</Typography>
+                        {todayOutMapsUrl && (
+                          <Box
+                            component="a"
+                            href={todayOutMapsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: colors.primary, textDecoration: 'none' }}
+                          >
+                            <MapPin size={14} />
+                            <Typography variant="caption">View location</Typography>
+                          </Box>
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+
                   <Box display="flex" gap={2}>
                     <Button
                       startIcon={<LogIn size={18} />}
@@ -215,7 +324,7 @@ const Attendance = () => {
 
       <Card title="Attendance History" subtitle={`${monthNames[month - 1]} ${year}`}>
         <Box display="flex" gap={2} mb={2} alignItems="center" flexWrap="nowrap">
-          {isAdmin && (
+          {canViewOrg && (
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <SearchBar value={search} onChange={setSearch} placeholder="Search employees..." fullWidth />
             </Box>
@@ -238,7 +347,7 @@ const Attendance = () => {
               fullWidth
             />
           </Box>
-          {isAdmin && (
+          {canViewOrg && (
             <Box sx={{ width: 160, flexShrink: 0 }}>
               <Select
                 label="Status"
@@ -265,7 +374,7 @@ const Attendance = () => {
         </Box>
 
         <DataTable
-          columns={isAdmin ? adminColumns : columns}
+          columns={canViewOrg ? adminColumns : columns}
           rows={paginatedRows}
           emptyTitle="No attendance records"
           pagination={{ total: rows.length, page, limit }}

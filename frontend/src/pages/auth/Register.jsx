@@ -24,12 +24,14 @@ const Register = () => {
   const onSubmit = async (data) => {
     setLoading(true);
     try {
+      const nameParts = (data.adminName || '').trim().split(/\s+/);
+      const firstName = nameParts[0] || 'Admin';
+      const lastName = nameParts.slice(1).join(' ') || 'User';
       await registerAdmin({
-        firstName: data.firstName,
-        lastName: data.lastName,
+        firstName,
+        lastName,
         email: data.email,
         password: data.password,
-        employeeId: data.employeeId,
         phone: data.phone,
         companyName: data.companyName,
       });
@@ -100,31 +102,16 @@ const Register = () => {
                   {...register('companyName')}
                 />
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
+              <Grid size={{ xs: 12 }}>
                 <Input
-                  label="First Name"
+                  label="Admin Name"
                   startIcon={<User size={18} />}
-                  error={errors.firstName?.message}
-                  {...register('firstName', { required: 'First name is required' })}
+                  placeholder="John Doe"
+                  error={errors.adminName?.message}
+                  {...register('adminName', { required: 'Admin name is required' })}
                 />
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <Input
-                  label="Last Name"
-                  startIcon={<User size={18} />}
-                  error={errors.lastName?.message}
-                  {...register('lastName', { required: 'Last name is required' })}
-                />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <Input
-                  label="Employee ID"
-                  placeholder="EMP001"
-                  error={errors.employeeId?.message}
-                  {...register('employeeId', { required: 'Employee ID is required' })}
-                />
-              </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
+              <Grid size={{ xs: 12 }}>
                 <Input
                   label="Phone"
                   startIcon={<Phone size={18} />}

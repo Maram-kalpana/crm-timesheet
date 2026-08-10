@@ -13,13 +13,17 @@ export const authAPI = {
 export const dashboardAPI = {
   adminStats: () => api.get('/dashboard/stats'),
   employeeStats: () => api.get('/dashboard/employee'),
+  teamLeadStats: () => api.get('/dashboard/team-lead'),
 };
 
 export const employeeAPI = {
   getAll: (params) => api.get('/employees', { params }),
   getById: (id) => api.get(`/employees/${id}`),
+  getAssignable: (params) => api.get('/employees/assignable', { params }),
   create: (data) => api.post('/employees', data),
   update: (id, data) => api.put(`/employees/${id}`, data),
+  assignTeam: (id, data) => api.put(`/employees/${id}/team`, data),
+  resetPassword: (id) => api.post(`/employees/${id}/reset-password`),
   delete: (id) => api.delete(`/employees/${id}`),
   export: () => api.get('/employees/export', { responseType: 'blob' }),
   uploadAvatar: (id, formData) => api.post(`/employees/${id}/avatar`, formData, {
@@ -74,11 +78,22 @@ export const payrollAPI = {
 };
 
 export const documentAPI = {
+  getMy: (params) => api.get('/documents/my', { params }),
   getAll: (params) => api.get('/documents', { params }),
   upload: (formData) => api.post('/documents', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   }),
+  download: (id) => api.get(`/documents/${id}/download`, { responseType: 'blob' }),
   delete: (id) => api.delete(`/documents/${id}`),
+};
+
+export const resignationAPI = {
+  getAll: () => api.get('/resignations'),
+  getMy: () => api.get('/resignations/my'),
+  submit: (data) => api.post('/resignations', data),
+  approve: (id) => api.put(`/resignations/${id}/approve`),
+  reject: (id, data) => api.put(`/resignations/${id}/reject`, data),
+  complete: (id) => api.put(`/resignations/${id}/complete`),
 };
 
 export const notificationAPI = {

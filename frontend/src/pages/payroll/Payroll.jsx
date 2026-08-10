@@ -12,7 +12,7 @@ import { colors } from '../../theme';
 import { formatCurrency, formatDate, getErrorMessage, downloadBlob, monthNames } from '../../utils/helpers';
 
 const Payroll = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isAdminOnly } = useAuth();
   const [payslips, setPayslips] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -108,7 +108,7 @@ const Payroll = () => {
         breadcrumb={[{ label: 'Payroll', path: '/payroll' }]}
       />
 
-      {isAdmin && (
+      {isAdminOnly && (
         <Box display="flex" gap={2} mb={3} alignItems="center" flexWrap="nowrap">
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Select

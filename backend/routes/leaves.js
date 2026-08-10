@@ -1,9 +1,42 @@
 const express = require('express');
 const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
+const { normalizeRole, canAccessEmployee, isAdmin, isHr, isTeamLead, getTeamMemberIds } = require('../middleware/rbac');
+const { sendLeaveNotification } = require('../utils/emailService');
+const { notifyEmployeeByEmpId } = require('../utils/notify');
 const dayjs = require('dayjs');
 
 const router = express.Router();
+
+const notifyLeaveEmployee = async (leaveId, status) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT lr.employee_id, lt.name as leave_type_name, e.first_name, e.last_name, u.email
+      FROM leave_requests lr
+      JOIN leave_types lt ON lr.leave_type_id = lt.id
+      JOIN employees e ON lr.employee_id = e.id
+      JOIN users u ON e.user_id = u.id
+      WHERE lr.id = ?
+    `, [leaveId]);
+    if (!rows.length) return;
+    const row = rows[0];
+    await notifyEmployeeByEmpId(
+      row.employee_id,
+      `Leave ${status}`,
+      `Your ${row.leave_type_name} leave request has been ${status}.`,
+      status === 'approved' ? 'success' : 'warning',
+      '/leave'
+    );
+    await sendLeaveNotification({
+      to: row.email,
+      name: `${row.first_name} ${row.last_name}`,
+      status,
+      leaveType: row.leave_type_name,
+    });
+  } catch (err) {
+    console.error('[Leave] Notification failed:', err.message);
+  }
+};
 
 router.get('/types', authenticate, async (req, res, next) => {
   try {
@@ -16,7 +49,15 @@ router.get('/types', authenticate, async (req, res, next) => {
 
 router.get('/balances', authenticate, async (req, res, next) => {
   try {
-    const empId = req.query.employeeId || req.user.employeeId;
+    let empId = req.user.employeeId;
+    if (req.query.employeeId) {
+      const targetId = Number(req.query.employeeId);
+      const allowed = await canAccessEmployee(req.user, targetId);
+      if (!allowed) {
+        return res.status(403).json({ success: false, message: 'Forbidden.' });
+      }
+      empId = targetId;
+    }
     const year = req.query.year || new Date().getFullYear();
     const [balances] = await pool.query(`
       SELECT lb.*, lt.name as leave_type_name, lt.is_paid
@@ -34,11 +75,21 @@ router.get('/', authenticate, async (req, res, next) => {
     const { status, employeeId, page = 1, limit = 10 } = req.query;
     let where = 'WHERE 1=1';
     const params = [];
+    const role = normalizeRole(req.user.role);
 
-    if (req.user.role === 'employee') {
+    if (role === 'employee') {
       where += ' AND lr.employee_id = ?';
       params.push(req.user.employeeId);
+    } else if (role === 'team_lead') {
+      const teamIds = await getTeamMemberIds(Number(req.user.employeeId));
+      const ids = [Number(req.user.employeeId), ...teamIds];
+      where += ` AND lr.employee_id IN (${ids.map(() => '?').join(',')})`;
+      params.push(...ids);
     } else if (employeeId) {
+      const allowed = await canAccessEmployee(req.user, Number(employeeId));
+      if (!allowed) {
+        return res.status(403).json({ success: false, message: 'Forbidden.' });
+      }
       where += ' AND lr.employee_id = ?';
       params.push(employeeId);
     }
@@ -73,7 +124,15 @@ router.get('/', authenticate, async (req, res, next) => {
 
 router.get('/stats', authenticate, async (req, res, next) => {
   try {
-    const empId = req.query.employeeId || req.user.employeeId;
+    let empId = req.user.employeeId;
+    if (req.query.employeeId) {
+      const targetId = Number(req.query.employeeId);
+      const allowed = await canAccessEmployee(req.user, targetId);
+      if (!allowed) {
+        return res.status(403).json({ success: false, message: 'Forbidden.' });
+      }
+      empId = targetId;
+    }
     const year = new Date().getFullYear();
 
     const [stats] = await pool.query(`
@@ -108,6 +167,11 @@ router.get('/:id', authenticate, async (req, res, next) => {
 
     if (!requests.length) {
       return res.status(404).json({ success: false, message: 'Leave request not found.' });
+    }
+
+    const allowed = await canAccessEmployee(req.user, requests[0].employee_id);
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
     }
 
     const [history] = await pool.query(`
@@ -164,7 +228,7 @@ router.post('/', authenticate, async (req, res, next) => {
   }
 });
 
-router.put('/:id/approve', authenticate, authorize('admin', 'hr', 'manager'), async (req, res, next) => {
+router.put('/:id/approve', authenticate, authorize('admin', 'hr', 'manager', 'team_lead'), async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -174,6 +238,13 @@ router.put('/:id/approve', authenticate, authorize('admin', 'hr', 'manager'), as
     }
 
     const leave = requests[0];
+    const role = normalizeRole(req.user.role);
+    if (role === 'team_lead') {
+      const teamIds = await getTeamMemberIds(Number(req.user.employeeId));
+      if (!teamIds.includes(Number(leave.employee_id))) {
+        return res.status(403).json({ success: false, message: 'You can only approve leaves for your team.' });
+      }
+    }
     await connection.query(
       'UPDATE leave_requests SET status = ?, approved_by = ?, approved_at = NOW() WHERE id = ?',
       ['approved', req.user.employeeId, req.params.id]
@@ -190,6 +261,7 @@ router.put('/:id/approve', authenticate, authorize('admin', 'hr', 'manager'), as
     );
 
     await connection.commit();
+    await notifyLeaveEmployee(req.params.id, 'approved');
     res.json({ success: true, message: 'Leave approved.' });
   } catch (error) {
     await connection.rollback();
@@ -199,8 +271,21 @@ router.put('/:id/approve', authenticate, authorize('admin', 'hr', 'manager'), as
   }
 });
 
-router.put('/:id/reject', authenticate, authorize('admin', 'hr', 'manager'), async (req, res, next) => {
+router.put('/:id/reject', authenticate, authorize('admin', 'hr', 'manager', 'team_lead'), async (req, res, next) => {
   try {
+    const [requests] = await pool.query('SELECT * FROM leave_requests WHERE id = ? AND status = ?', [req.params.id, 'pending']);
+    if (!requests.length) {
+      return res.status(404).json({ success: false, message: 'Pending leave request not found.' });
+    }
+
+    const role = normalizeRole(req.user.role);
+    if (role === 'team_lead') {
+      const teamIds = await getTeamMemberIds(Number(req.user.employeeId));
+      if (!teamIds.includes(Number(requests[0].employee_id))) {
+        return res.status(403).json({ success: false, message: 'You can only reject leaves for your team.' });
+      }
+    }
+
     const { reason } = req.body;
     await pool.query(
       'UPDATE leave_requests SET status = ?, approved_by = ?, approved_at = NOW(), rejection_reason = ? WHERE id = ? AND status = ?',
@@ -210,6 +295,7 @@ router.put('/:id/reject', authenticate, authorize('admin', 'hr', 'manager'), asy
       'INSERT INTO leave_status_history (leave_request_id, status, changed_by, comment) VALUES (?, ?, ?, ?)',
       [req.params.id, 'rejected', req.user.employeeId, reason]
     );
+    await notifyLeaveEmployee(req.params.id, 'rejected');
     res.json({ success: true, message: 'Leave rejected.' });
   } catch (error) {
     next(error);

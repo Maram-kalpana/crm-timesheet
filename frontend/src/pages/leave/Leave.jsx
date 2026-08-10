@@ -14,7 +14,7 @@ import { formatDate, getErrorMessage } from '../../utils/helpers';
 import { CalendarDays } from 'lucide-react';
 
 const Leave = () => {
-  const { isAdmin, isManager } = useAuth();
+  const { isAdmin, isAdminOnly, isHr, isTeamLead, isEmployee } = useAuth();
   const [leaves, setLeaves] = useState([]);
   const [stats, setStats] = useState(null);
   const [types, setTypes] = useState([]);
@@ -117,7 +117,7 @@ const Leave = () => {
             />
           </Box>
         ))}
-        {!isAdmin && (
+        {!isAdminOnly && (
           <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
             <Button startIcon={<Plus size={18} />} onClick={() => setModalOpen(true)}>
               Apply Leave
@@ -145,7 +145,7 @@ const Leave = () => {
           columns={columns}
           rows={leaves}
           actions={(row) => {
-            if (!row || row.status !== 'pending' || !(isAdmin || isManager)) return [];
+            if (!row || row.status !== 'pending' || !(isAdminOnly || isHr || isTeamLead)) return [];
             return [
               { label: 'Approve', onClick: () => setConfirmAction({ type: 'approve', id: row.id }) },
               { label: 'Reject', onClick: () => setConfirmAction({ type: 'reject', id: row.id }) },

@@ -4,6 +4,13 @@ const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
+const createNotification = async (userId, title, message, type = 'info', link = null) => {
+  await pool.query(
+    'INSERT INTO notifications (user_id, title, message, type, link) VALUES (?, ?, ?, ?, ?)',
+    [userId, title, message, type, link]
+  );
+};
+
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const { unreadOnly, page = 1, limit = 20 } = req.query;
@@ -28,15 +35,6 @@ router.get('/', authenticate, async (req, res, next) => {
   }
 });
 
-router.put('/:id/read', authenticate, async (req, res, next) => {
-  try {
-    await pool.query('UPDATE notifications SET is_read = TRUE WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
-    res.json({ success: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
 router.put('/read-all', authenticate, async (req, res, next) => {
   try {
     await pool.query('UPDATE notifications SET is_read = TRUE WHERE user_id = ?', [req.user.id]);
@@ -46,12 +44,14 @@ router.put('/read-all', authenticate, async (req, res, next) => {
   }
 });
 
-const createNotification = async (userId, title, message, type = 'info', link = null) => {
-  await pool.query(
-    'INSERT INTO notifications (user_id, title, message, type, link) VALUES (?, ?, ?, ?, ?)',
-    [userId, title, message, type, link]
-  );
-};
+router.put('/:id/read', authenticate, async (req, res, next) => {
+  try {
+    await pool.query('UPDATE notifications SET is_read = TRUE WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
 
 module.exports = router;
 module.exports.createNotification = createNotification;

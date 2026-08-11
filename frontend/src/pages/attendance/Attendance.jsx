@@ -51,31 +51,27 @@ const PhotoCell = ({ selfieUrl }) => {
   const url = getFileUrl(selfieUrl);
   if (!url) {
     return (
-      <Box sx={{ width: 32, height: 32, borderRadius: 1, bgcolor: colors.background, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Box sx={{ width: 32, height: 32, borderRadius: 0, bgcolor: colors.background, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <ImageOff size={14} color={colors.text.secondary} />
       </Box>
     );
   }
   return (
-    <Box
-      component="a"
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-    >
+    <Box component="a" href={url} target="_blank" rel="noopener noreferrer">
       <Box
         component="img"
         src={url}
         alt="Selfie"
-        sx={{ width: 32, height: 32, borderRadius: 1, objectFit: 'cover', border: `1px solid ${colors.border}` }}
+        sx={{ width: 32, height: 32, borderRadius: 0, objectFit: 'cover', border: `1px solid ${colors.border}` }}
       />
     </Box>
   );
 };
 
 const Attendance = () => {
-  const { user, isAdmin, isTeamLead } = useAuth();
+  const { isAdminOnly, isAdmin, isTeamLead } = useAuth();
   const canViewOrg = isAdmin || isTeamLead;
+  const canClockInOut = !isAdminOnly;
   const [today, setToday] = useState(null);
   const [history, setHistory] = useState([]);
   const [allRecords, setAllRecords] = useState([]);
@@ -92,18 +88,21 @@ const Attendance = () => {
   const [limit, setLimit] = useState(10);
 
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [cameraAction, setCameraAction] = useState(null); // 'in' | 'out'
+  const [cameraAction, setCameraAction] = useState(null);
 
   const fetchData = async () => {
+    setLoading(true);
     try {
-      const todayRes = await attendanceAPI.today();
-      setToday(todayRes.data.data);
+      if (canClockInOut) {
+        const todayRes = await attendanceAPI.today();
+        setToday(todayRes.data.data);
+      }
 
       if (canViewOrg) {
-        const allRes = await attendanceAPI.getAll({ search, status: statusFilter, month, year });
+        const allRes = await attendanceAPI.getAll({ search, status: statusFilter, month, year, limit: 500 });
         setAllRecords(allRes.data.data || []);
       } else {
-        const historyRes = await attendanceAPI.history({ month, year });
+        const historyRes = await attendanceAPI.history({ month, year, limit: 100 });
         setHistory(historyRes.data.data || []);
       }
     } catch (error) {
@@ -113,7 +112,7 @@ const Attendance = () => {
     }
   };
 
-  useEffect(() => { fetchData(); }, [canViewOrg, search, statusFilter, month, year]);
+  useEffect(() => { fetchData(); }, [canViewOrg, canClockInOut, search, statusFilter, month, year]);
   useEffect(() => { setPage(1); }, [search, statusFilter, month, year]);
 
   useEffect(() => {
@@ -137,7 +136,6 @@ const Attendance = () => {
     setActionLoading(true);
     try {
       const location = await getLocationString();
-
       const formData = new FormData();
       formData.append('location', location);
       formData.append('selfie', selfieBlob, 'selfie.jpg');
@@ -204,108 +202,101 @@ const Attendance = () => {
     <Box>
       <PageHeader
         title="Attendance"
-        subtitle="Track your daily attendance and working hours"
+        subtitle={isAdminOnly ? 'View organization attendance records' : 'Track your daily attendance and working hours'}
         breadcrumb={[{ label: 'Attendance', path: '/attendance' }]}
       />
 
       <Grid container spacing={3} mb={3}>
-        <Grid size={{ xs: 12, lg: 8 }}>
-          <Card title="Today's Attendance">
-            <Grid container spacing={3}>
-              <Grid size={{ xs: 12, md: 6 }}>
-                <Box textAlign="center" p={3} bgcolor={colors.background} borderRadius={3}>
-                  <Typography variant="h2" fontWeight={700} color="primary">{timer}</Typography>
-                  <Typography variant="body2" color="text.secondary" mb={2}>Live Timer</Typography>
-                  <StatusBadge status={today?.status || 'absent'} />
-                </Box>
-              </Grid>
-              <Grid size={{ xs: 12, md: 6 }}>
-                <Box display="flex" flexDirection="column" gap={2}>
-                  {todayInSelfieUrl && (
-                    <Box display="flex" alignItems="center" gap={1.5}>
-                      <Box
-                        component="img"
-                        src={todayInSelfieUrl}
-                        alt="Clock-in selfie"
-                        sx={{ width: 48, height: 48, borderRadius: 2, objectFit: 'cover', border: `1px solid ${colors.border}` }}
-                      />
-                      <Box>
-                        <Typography variant="caption" color="text.secondary" display="block">Clocked in</Typography>
-                        {todayInMapsUrl && (
-                          <Box
-                            component="a"
-                            href={todayInMapsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: colors.primary, textDecoration: 'none' }}
-                          >
-                            <MapPin size={14} />
-                            <Typography variant="caption">View location</Typography>
-                          </Box>
-                        )}
-                      </Box>
-                    </Box>
-                  )}
-                  {!todayInSelfieUrl && (
-                    <Box display="flex" alignItems="center" gap={1}>
-                      <MapPin size={18} color={colors.text.secondary} />
-                      <Typography variant="body2">Not checked in</Typography>
-                    </Box>
-                  )}
-
-                  {todayOutSelfieUrl && (
-                    <Box display="flex" alignItems="center" gap={1.5}>
-                      <Box
-                        component="img"
-                        src={todayOutSelfieUrl}
-                        alt="Clock-out selfie"
-                        sx={{ width: 48, height: 48, borderRadius: 2, objectFit: 'cover', border: `1px solid ${colors.border}` }}
-                      />
-                      <Box>
-                        <Typography variant="caption" color="text.secondary" display="block">Clocked out</Typography>
-                        {todayOutMapsUrl && (
-                          <Box
-                            component="a"
-                            href={todayOutMapsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: colors.primary, textDecoration: 'none' }}
-                          >
-                            <MapPin size={14} />
-                            <Typography variant="caption">View location</Typography>
-                          </Box>
-                        )}
-                      </Box>
-                    </Box>
-                  )}
-
-                  <Box display="flex" gap={2}>
-                    <Button
-                      startIcon={<LogIn size={18} />}
-                      onClick={() => openCamera('in')}
-                      disabled={!canClockIn}
-                    >
-                      Clock In
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      startIcon={<LogOut size={18} />}
-                      onClick={() => openCamera('out')}
-                      disabled={!canClockOut}
-                      color="error"
-                    >
-                      Clock Out
-                    </Button>
+        {canClockInOut && (
+          <Grid size={{ xs: 12, lg: 8 }}>
+            <Card title="Today's Attendance">
+              <Grid container spacing={3}>
+                <Grid size={{ xs: 12, md: 6 }}>
+                  <Box textAlign="center" p={3} bgcolor={colors.background} borderRadius={0}>
+                    <Typography variant="h2" fontWeight={700} color="primary">{timer}</Typography>
+                    <Typography variant="body2" color="text.secondary" mb={2}>Live Timer</Typography>
+                    <StatusBadge status={today?.status || 'absent'} />
                   </Box>
-                  <Typography variant="caption" color="text.secondary">
-                    A live photo and your location are captured automatically when you clock in or out.
-                  </Typography>
-                </Box>
+                </Grid>
+                <Grid size={{ xs: 12, md: 6 }}>
+                  <Box display="flex" flexDirection="column" gap={2}>
+                    {todayInSelfieUrl && (
+                      <Box display="flex" alignItems="center" gap={1.5}>
+                        <Box
+                          component="img"
+                          src={todayInSelfieUrl}
+                          alt="Clock-in selfie"
+                          sx={{ width: 48, height: 48, borderRadius: 0, objectFit: 'cover', border: `1px solid ${colors.border}` }}
+                        />
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" display="block">Clocked in</Typography>
+                          {todayInMapsUrl && (
+                            <Box
+                              component="a"
+                              href={todayInMapsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: colors.primary, textDecoration: 'none' }}
+                            >
+                              <MapPin size={14} />
+                              <Typography variant="caption">View location</Typography>
+                            </Box>
+                          )}
+                        </Box>
+                      </Box>
+                    )}
+                    {!todayInSelfieUrl && (
+                      <Box display="flex" alignItems="center" gap={1}>
+                        <MapPin size={18} color={colors.text.secondary} />
+                        <Typography variant="body2">Not checked in</Typography>
+                      </Box>
+                    )}
+
+                    {todayOutSelfieUrl && (
+                      <Box display="flex" alignItems="center" gap={1.5}>
+                        <Box
+                          component="img"
+                          src={todayOutSelfieUrl}
+                          alt="Clock-out selfie"
+                          sx={{ width: 48, height: 48, borderRadius: 0, objectFit: 'cover', border: `1px solid ${colors.border}` }}
+                        />
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" display="block">Clocked out</Typography>
+                          {todayOutMapsUrl && (
+                            <Box
+                              component="a"
+                              href={todayOutMapsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              sx={{ display: 'flex', alignItems: 'center', gap: 0.5, color: colors.primary, textDecoration: 'none' }}
+                            >
+                              <MapPin size={14} />
+                              <Typography variant="caption">View location</Typography>
+                            </Box>
+                          )}
+                        </Box>
+                      </Box>
+                    )}
+
+                    <Box display="flex" gap={2}>
+                      <Button startIcon={<LogIn size={18} />} onClick={() => openCamera('in')} disabled={!canClockIn}>
+                        Clock In
+                      </Button>
+                      <Button variant="outlined" startIcon={<LogOut size={18} />} onClick={() => openCamera('out')} disabled={!canClockOut} color="error">
+                        Clock Out
+                      </Button>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary">
+                      A live photo and your location are captured automatically when you clock in or out.
+                    </Typography>
+                  </Box>
+                </Grid>
               </Grid>
-            </Grid>
-          </Card>
-        </Grid>
-        <Grid size={{ xs: 12, lg: 4 }}>
+            </Card>
+          </Grid>
+        )}
+
+        <Grid size={{ xs: 12, lg: canClockInOut ? 4 : 12 }}>
           <Card title="Monthly Summary">
             <Box display="flex" flexDirection="column" gap={2}>
               {['present', 'late', 'absent', 'on-leave'].map((status) => {
@@ -343,7 +334,7 @@ const Attendance = () => {
               label="Year"
               value={year}
               onChange={(e) => setYear(e.target.value)}
-              options={[2024, 2025, 2026].map((y) => ({ value: y, label: String(y) }))}
+              options={[2024, 2025, 2026, 2027].map((y) => ({ value: y, label: String(y) }))}
               fullWidth
             />
           </Box>
@@ -363,14 +354,11 @@ const Attendance = () => {
               />
             </Box>
           )}
-          <Button
-            variant="outlined"
-            startIcon={<Download size={18} />}
-            onClick={handleExport}
-            sx={{ flexShrink: 0 }}
-          >
-            Export
-          </Button>
+          {(isAdminOnly || canViewOrg) && (
+            <Button variant="outlined" startIcon={<Download size={18} />} onClick={handleExport} sx={{ flexShrink: 0 }}>
+              Export
+            </Button>
+          )}
         </Box>
 
         <DataTable
@@ -383,13 +371,15 @@ const Attendance = () => {
         />
       </Card>
 
-      <CameraCapture
-        open={cameraOpen}
-        onClose={closeCamera}
-        onConfirm={handleCameraConfirm}
-        confirmLoading={actionLoading}
-        title={cameraAction === 'in' ? 'Clock In — Capture Selfie' : 'Clock Out — Capture Selfie'}
-      />
+      {canClockInOut && (
+        <CameraCapture
+          open={cameraOpen}
+          onClose={closeCamera}
+          onConfirm={handleCameraConfirm}
+          confirmLoading={actionLoading}
+          title={cameraAction === 'in' ? 'Clock In — Capture Selfie' : 'Clock Out — Capture Selfie'}
+        />
+      )}
     </Box>
   );
 };

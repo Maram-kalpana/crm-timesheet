@@ -34,7 +34,7 @@ const canAccessProject = async (user, projectId) => {
 
 router.get('/', authenticate, async (req, res, next) => {
   try {
-    const { status, search, page = 1, limit = 10 } = req.query;
+    const { status, search, page = 1, limit = 100 } = req.query;
     let where = 'WHERE 1=1';
     const params = [];
 
@@ -42,32 +42,30 @@ router.get('/', authenticate, async (req, res, next) => {
     if (search) { where += ' AND p.name LIKE ?'; params.push(`%${search}%`); }
 
     const role = normalizeRole(req.user.role);
-    const needsMemberJoin = role === 'employee' || role === 'team_lead';
-    const joinClause = needsMemberJoin ? 'LEFT JOIN project_members pm ON p.id = pm.project_id' : '';
 
     if (role === 'employee') {
-      where += ' AND (pm.employee_id = ? OR p.manager_id = ?)';
+      where += ' AND (p.manager_id = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.employee_id = ?))';
       params.push(req.user.employeeId, req.user.employeeId);
     } else if (role === 'team_lead') {
       const teamIds = await getTeamMemberIds(Number(req.user.employeeId));
       const ids = [Number(req.user.employeeId), ...teamIds];
-      where += ` AND (p.manager_id = ? OR pm.employee_id IN (${ids.map(() => '?').join(',')}))`;
+      const placeholders = ids.map(() => '?').join(',');
+      where += ` AND (p.manager_id = ? OR EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = p.id AND pm.employee_id IN (${placeholders})))`;
       params.push(req.user.employeeId, ...ids);
     }
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const [projects] = await pool.query(`
-      SELECT DISTINCT p.*, CONCAT(e.first_name, ' ', e.last_name) as manager_name,
+      SELECT p.*, CONCAT(e.first_name, ' ', e.last_name) as manager_name,
         (SELECT COUNT(*) FROM project_members WHERE project_id = p.id) as member_count,
         (SELECT COUNT(*) FROM project_tasks WHERE project_id = p.id) as task_count,
         (SELECT COUNT(*) FROM project_tasks WHERE project_id = p.id AND status = 'done') as completed_tasks
       FROM projects p
-      ${joinClause}
       LEFT JOIN employees e ON p.manager_id = e.id
       ${where}
       ORDER BY p.updated_at DESC
       LIMIT ? OFFSET ?
-    `, [...params, parseInt(limit), offset]);
+    `, [...params, parseInt(limit, 10), offset]);
 
     const data = projects.map((p) => ({
       ...p,
@@ -132,29 +130,41 @@ router.get('/:id', authenticate, async (req, res, next) => {
   }
 });
 
-router.post('/', authenticate, authorize('admin', 'hr', 'manager'), async (req, res, next) => {
+router.post('/', authenticate, authorize('admin'), async (req, res, next) => {
+  const connection = await pool.getConnection();
   try {
+    await connection.beginTransaction();
     const { name, description, status, priority, startDate, endDate, teamLeadId, memberIds, techStack } = req.body;
 
-    if (!teamLeadId) {
-      return res.status(400).json({ success: false, message: 'Team lead is required.' });
+    if (!name || !teamLeadId) {
+      return res.status(400).json({ success: false, message: 'Project name and team lead are required.' });
     }
 
-    const [result] = await pool.query(
+    const [tlCheck] = await connection.query(
+      `SELECT e.id FROM employees e JOIN users u ON e.user_id = u.id WHERE e.id = ? AND u.role = 'team_lead' AND u.is_active = TRUE`,
+      [teamLeadId]
+    );
+    if (!tlCheck.length) {
+      return res.status(400).json({ success: false, message: 'Selected team lead is invalid.' });
+    }
+
+    const [result] = await connection.query(
       'INSERT INTO projects (name, description, status, priority, start_date, end_date, manager_id, tech_stack, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [name, description, status || 'planning', priority || 'medium', startDate, endDate, teamLeadId, JSON.stringify(techStack || []), req.user.employeeId]
     );
 
     const memberOnlyIds = (memberIds || []).filter((id) => String(id) !== String(teamLeadId));
-const allMemberIds = Array.from(new Set([teamLeadId, ...memberOnlyIds]));
-const values = allMemberIds.map((id) => [result.insertId, id]);
-await pool.query('INSERT INTO project_members (project_id, employee_id) VALUES ?', [values]);
+    const allMemberIds = Array.from(new Set([teamLeadId, ...memberOnlyIds]));
+    if (allMemberIds.length) {
+      const values = allMemberIds.map((id) => [result.insertId, id]);
+      await connection.query('INSERT INTO project_members (project_id, employee_id) VALUES ?', [values]);
+    }
 
-    // Notify team lead + all members about the new assignment
-    const allAssignedIds = Array.from(new Set([teamLeadId, ...memberOnlyIds]));
+    await connection.commit();
+
     const [employeeUsers] = await pool.query(
-      `SELECT id, user_id FROM employees WHERE id IN (${allAssignedIds.map(() => '?').join(',')})`,
-      allAssignedIds
+      `SELECT id, user_id FROM employees WHERE id IN (${allMemberIds.map(() => '?').join(',')})`,
+      allMemberIds
     );
 
     for (const emp of employeeUsers) {
@@ -172,7 +182,10 @@ await pool.query('INSERT INTO project_members (project_id, employee_id) VALUES ?
 
     res.status(201).json({ success: true, message: 'Project created.', id: result.insertId });
   } catch (error) {
+    await connection.rollback();
     next(error);
+  } finally {
+    connection.release();
   }
 });
 
@@ -263,7 +276,14 @@ router.post('/:id/updates', authenticate, async (req, res, next) => {
       [req.params.id, req.user.employeeId, updateText, gitRepo || null, credentials || null, status || null, hoursSpent || 0, finalDate]
     );
 
-    // Notify admins/HR and the project's team lead about this update
+    if (status === 'completed') {
+      await pool.query('UPDATE projects SET completion_percentage = LEAST(100, COALESCE(completion_percentage, 0) + 10), status = ? WHERE id = ?', ['in-progress', req.params.id]);
+    } else if (status === 'in-progress') {
+      await pool.query('UPDATE projects SET status = ? WHERE id = ? AND status = ?', ['in-progress', req.params.id, 'planning']);
+    } else if (status === 'blocked') {
+      await pool.query('UPDATE projects SET status = ? WHERE id = ?', ['on-hold', req.params.id]);
+    }
+
     const [projectRows] = await pool.query('SELECT name, manager_id FROM projects WHERE id = ?', [req.params.id]);
     const projectName = projectRows[0]?.name || 'a project';
     const managerId = projectRows[0]?.manager_id;

@@ -39,7 +39,7 @@ const DataTable = ({
 
   if (loading) {
     return (
-      <Paper sx={{ borderRadius: 3, overflow: 'hidden', border: `1px solid ${colors.border}` }}>
+      <Paper sx={{ borderRadius: 0, overflow: 'hidden', border: `1px solid ${colors.border}` }}>
         {[...Array(5)].map((_, i) => (
           <Skeleton key={i} height={56} sx={{ mx: 2, my: 1 }} />
         ))}
@@ -48,7 +48,7 @@ const DataTable = ({
   }
 
   return (
-    <Paper sx={{ borderRadius: 3, overflow: 'hidden', border: `1px solid ${colors.border}` }}>
+    <Paper sx={{ borderRadius: 0, overflow: 'hidden', border: `1px solid ${colors.border}` }}>
       {onExport && (
         <Box display="flex" justifyContent="flex-end" p={2} pb={0}>
           <Button variant="outlined" size="small" startIcon={<Download size={16} />} onClick={onExport}>

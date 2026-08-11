@@ -10,6 +10,9 @@ const router = express.Router();
 
 router.post('/clock-in', authenticate, upload.single('selfie'), async (req, res, next) => {
   try {
+    if (normalizeRole(req.user.role) === 'admin') {
+      return res.status(403).json({ success: false, message: 'Admins cannot clock in or out.' });
+    }
     const empId = req.user.employeeId;
     if (!empId) {
       return res.status(400).json({ success: false, message: 'Employee profile not found.' });
@@ -52,6 +55,9 @@ router.post('/clock-in', authenticate, upload.single('selfie'), async (req, res,
 
 router.post('/clock-out', authenticate, upload.single('selfie'), async (req, res, next) => {
   try {
+    if (normalizeRole(req.user.role) === 'admin') {
+      return res.status(403).json({ success: false, message: 'Admins cannot clock in or out.' });
+    }
     const empId = req.user.employeeId;
     const today = dayjs().format('YYYY-MM-DD');
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
@@ -158,10 +164,12 @@ router.get('/calendar/:employeeId/:year/:month', authenticate, async (req, res, 
 
 router.get('/all', authenticate, authorize('admin', 'hr', 'manager', 'team_lead'), async (req, res, next) => {
   try {
-    const { date, status, department, search, page = 1, limit = 20 } = req.query;
-    const targetDate = date || dayjs().format('YYYY-MM-DD');
-    let where = 'WHERE a.date = ?';
-    const params = [targetDate];
+    const { date, status, department, search, month, year, page = 1, limit = 100 } = req.query;
+    const m = month ? parseInt(month, 10) : dayjs().month() + 1;
+    const y = year ? parseInt(year, 10) : dayjs().year();
+
+    let where = 'WHERE MONTH(a.date) = ? AND YEAR(a.date) = ?';
+    const params = [m, y];
 
     const role = normalizeRole(req.user.role);
     if (role === 'team_lead') {
@@ -173,6 +181,10 @@ router.get('/all', authenticate, authorize('admin', 'hr', 'manager', 'team_lead'
       }
     }
 
+    if (date) {
+      where += ' AND a.date = ?';
+      params.push(date);
+    }
     if (status) { where += ' AND a.status = ?'; params.push(status); }
     if (department) { where += ' AND e.department_id = ?'; params.push(department); }
     if (search) {
@@ -181,7 +193,7 @@ router.get('/all', authenticate, authorize('admin', 'hr', 'manager', 'team_lead'
       params.push(s, s, s);
     }
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const [records] = await pool.query(`
       SELECT a.*, e.first_name, e.last_name, e.avatar, u.employee_id, d.name as department_name
       FROM attendance a
@@ -189,11 +201,18 @@ router.get('/all', authenticate, authorize('admin', 'hr', 'manager', 'team_lead'
       JOIN users u ON e.user_id = u.id
       LEFT JOIN departments d ON e.department_id = d.id
       ${where}
-      ORDER BY a.clock_in DESC
+      ORDER BY a.date DESC, a.clock_in DESC
       LIMIT ? OFFSET ?
-    `, [...params, parseInt(limit), offset]);
+    `, [...params, parseInt(limit, 10), offset]);
 
-    res.json({ success: true, data: records, date: targetDate });
+    const [[{ total }]] = await pool.query(`
+      SELECT COUNT(*) as total FROM attendance a
+      JOIN employees e ON a.employee_id = e.id
+      JOIN users u ON e.user_id = u.id
+      ${where}
+    `, params);
+
+    res.json({ success: true, data: records, pagination: { total, page: parseInt(page, 10), limit: parseInt(limit, 10), month: m, year: y } });
   } catch (error) {
     next(error);
   }

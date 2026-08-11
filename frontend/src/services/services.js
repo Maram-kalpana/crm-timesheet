@@ -20,6 +20,7 @@ export const employeeAPI = {
   getAll: (params) => api.get('/employees', { params }),
   getById: (id) => api.get(`/employees/${id}`),
   getAssignable: (params) => api.get('/employees/assignable', { params }),
+  getTeamLeads: (params) => api.get('/employees/team-leads', { params }),
   create: (data) => api.post('/employees', data),
   update: (id, data) => api.put(`/employees/${id}`, data),
   assignTeam: (id, data) => api.put(`/employees/${id}/team`, data),

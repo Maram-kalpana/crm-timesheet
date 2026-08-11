@@ -46,7 +46,28 @@ router.get('/assignable', authenticate, authorize('admin'), async (req, res, nex
       params.push(s, s, s);
     }
     const [rows] = await pool.query(`
-      SELECT e.id, e.first_name, e.last_name, u.employee_id, e.designation, e.reporting_manager_id
+      SELECT e.id, e.first_name, e.last_name, u.employee_id, e.designation, e.reporting_manager_id, u.role
+      FROM employees e JOIN users u ON e.user_id = u.id ${where}
+      ORDER BY e.first_name LIMIT 100
+    `, params);
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/team-leads', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
+  try {
+    const { search } = req.query;
+    let where = "WHERE u.role = 'team_lead' AND u.is_active = TRUE";
+    const params = [];
+    if (search) {
+      where += ' AND (e.first_name LIKE ? OR e.last_name LIKE ? OR u.employee_id LIKE ?)';
+      const s = `%${search}%`;
+      params.push(s, s, s);
+    }
+    const [rows] = await pool.query(`
+      SELECT e.id, e.first_name, e.last_name, u.employee_id, e.designation, u.role
       FROM employees e JOIN users u ON e.user_id = u.id ${where}
       ORDER BY e.first_name LIMIT 100
     `, params);

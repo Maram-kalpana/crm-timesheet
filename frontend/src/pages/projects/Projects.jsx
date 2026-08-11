@@ -62,8 +62,10 @@ const Projects = () => {
   const navigate = useNavigate();
 
   const [employees, setEmployees] = useState([]);
+  const [teamLeads, setTeamLeads] = useState([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
   const { register, handleSubmit, reset, control, formState: { errors } } = useForm();
 
   // --- Initial documentation files for Add Project ---
@@ -94,18 +96,26 @@ const Projects = () => {
   const [docDeleteId, setDocDeleteId] = useState(null);
 
   useEffect(() => {
-    projectAPI.getAll({ search })
-      .then(({ data }) => setProjects(data.data))
+    projectAPI.getAll({ search, limit: 100 })
+      .then(({ data }) => setProjects(data.data || []))
       .catch((e) => toast.error(getErrorMessage(e)))
       .finally(() => setLoading(false));
   }, [search]);
 
   useEffect(() => {
-    if (!isAdminOnly) return;
-    employeeAPI.getAll({ limit: 100 })
+    if (!isAdminOnly || !drawerOpen) return;
+    employeeAPI.getTeamLeads()
+      .then(({ data }) => setTeamLeads(data.data || []))
+      .catch(() => setTeamLeads([]));
+    employeeAPI.getAssignable()
       .then(({ data }) => setEmployees(data.data || []))
-      .catch(() => {});
-  }, [isAdminOnly]);
+      .catch(() => setEmployees([]));
+  }, [isAdminOnly, drawerOpen]);
+
+  const teamLeadOptions = teamLeads.map((e) => ({
+    id: e.id,
+    label: `${getFullName(e.first_name, e.last_name)}${e.designation ? ` — ${e.designation}` : ''}`,
+  }));
 
   const employeeOptions = employees.map((e) => ({
     id: e.id,
@@ -165,10 +175,12 @@ const Projects = () => {
   };
 
   const onSubmit = async (formData) => {
+    if (creatingProject) return;
     if (!formData.teamLead) {
       toast.error('Please select a team lead');
       return;
     }
+    setCreatingProject(true);
     setSubmitting(true);
     try {
       const memberIds = (formData.employees || [])
@@ -202,14 +214,13 @@ const Projects = () => {
       closeAddDrawer();
       reset();
       setPendingDocs([]);
-      setLoading(true);
-      const { data } = await projectAPI.getAll({ search });
-      setProjects(data.data);
-      setLoading(false);
+      const { data } = await projectAPI.getAll({ search, limit: 100 });
+      setProjects(data.data || []);
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
       setSubmitting(false);
+      setCreatingProject(false);
     }
   };
 
@@ -299,7 +310,13 @@ const Projects = () => {
           ]}
           action={
             <Box display="flex" gap={1}>
-              <Button variant="outlined" onClick={() => { setSelectedProject(null); setView('list'); }}>Back to List</Button>
+              <Button variant="outlined" onClick={() => {
+                setSelectedProject(null);
+                setView('list');
+                projectAPI.getAll({ search, limit: 100 })
+                  .then(({ data }) => setProjects(data.data || []))
+                  .catch(() => {});
+              }}>Back to List</Button>
               <Button startIcon={<Plus size={16} />} onClick={openAddUpdateDrawer}>Add Update</Button>
               <ToggleButtonGroup value={view} exclusive size="small">
                 <ToggleButton value="kanban"><LayoutGrid size={16} /></ToggleButton>
@@ -636,7 +653,7 @@ const Projects = () => {
 
             <Divider />
 
-            <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
+            <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }} component="form" id="add-project-form" onSubmit={handleSubmit(onSubmit)}>
               <Grid container spacing={2}>
                 <Grid size={{ xs: 12 }}>
                   <Input
@@ -674,7 +691,7 @@ const Projects = () => {
                     rules={{ required: 'Team lead is required' }}
                     render={({ field }) => (
                       <Autocomplete
-                        options={employeeOptions}
+                        options={teamLeadOptions}
                         getOptionLabel={(opt) => opt.label || ''}
                         isOptionEqualToValue={(opt, val) => opt.id === val.id}
                         value={field.value || null}
@@ -683,8 +700,9 @@ const Projects = () => {
                           <TextField
                             {...params}
                             label="Team Lead"
+                            placeholder="Select a team lead"
                             error={!!errors.teamLead}
-                            helperText={errors.teamLead?.message}
+                            helperText={errors.teamLead?.message || 'Only employees with Team Lead role are shown'}
                           />
                         )}
                       />
@@ -779,8 +797,10 @@ const Projects = () => {
             <Divider />
 
             <Box sx={{ p: 3, display: 'flex', justifyContent: 'flex-end', gap: 1.5 }}>
-              <Button variant="outlined" onClick={closeAddDrawer}>Cancel</Button>
-              <Button onClick={handleSubmit(onSubmit)} loading={submitting}>Create Project</Button>
+              <Button variant="outlined" onClick={closeAddDrawer} type="button">Cancel</Button>
+              <Button type="submit" form="add-project-form" loading={submitting} disabled={creatingProject}>
+                Create Project
+              </Button>
             </Box>
           </Box>
         </Drawer>

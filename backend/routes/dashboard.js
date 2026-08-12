@@ -10,8 +10,14 @@ router.get('/stats', authenticate, authorize('admin', 'hr'), async (req, res, ne
     const today = new Date().toISOString().split('T')[0];
     const month = new Date().getMonth() + 1;
     const year = new Date().getFullYear();
+    const role = req.user.role === 'manager' ? 'team_lead' : req.user.role;
+    const excludeAdmin = role === 'hr' ? "AND u.role != 'admin'" : '';
 
-    const [[{ totalEmployees }]] = await pool.query('SELECT COUNT(*) as totalEmployees FROM employees');
+    const [[{ totalEmployees }]] = await pool.query(`
+      SELECT COUNT(*) as totalEmployees FROM employees e
+      JOIN users u ON e.user_id = u.id
+      WHERE 1=1 ${excludeAdmin}
+    `);
     const [[{ present }]] = await pool.query(
       "SELECT COUNT(*) as present FROM attendance WHERE date = ? AND status IN ('present', 'late')",
       [today]
@@ -32,11 +38,13 @@ router.get('/stats', authenticate, authorize('admin', 'hr'), async (req, res, ne
     );
 
     const [departmentStats] = await pool.query(`
-      SELECT d.name, COUNT(e.id) as count
+      SELECT d.name,
+        COUNT(CASE WHEN e.id IS NOT NULL AND (u.role != 'admin' OR ? = 'admin') THEN e.id END) as count
       FROM departments d
       LEFT JOIN employees e ON d.id = e.department_id
+      LEFT JOIN users u ON e.user_id = u.id
       GROUP BY d.id, d.name
-    `);
+    `, [role]);
 
     const [attendanceTrend] = await pool.query(`
       SELECT DATE(date) as date,
@@ -62,6 +70,7 @@ router.get('/stats', authenticate, authorize('admin', 'hr'), async (req, res, ne
       FROM employees e
       JOIN users u ON e.user_id = u.id
       LEFT JOIN departments d ON e.department_id = d.id
+      WHERE 1=1 ${excludeAdmin}
       ORDER BY e.joining_date DESC LIMIT 5
     `);
 

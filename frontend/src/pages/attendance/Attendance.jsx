@@ -69,8 +69,8 @@ const PhotoCell = ({ selfieUrl }) => {
 };
 
 const Attendance = () => {
-  const { isAdminOnly, isAdmin, isTeamLead } = useAuth();
-  const canViewOrg = isAdmin || isTeamLead;
+  const { isAdminOnly, isHr, isTeamLead } = useAuth();
+  const canViewOrg = isAdminOnly || isHr || isTeamLead;
   const canClockInOut = !isAdminOnly;
   const [today, setToday] = useState(null);
   const [history, setHistory] = useState([]);
@@ -202,7 +202,12 @@ const Attendance = () => {
     <Box>
       <PageHeader
         title="Attendance"
-        subtitle={isAdminOnly ? 'View organization attendance records' : 'Track your daily attendance and working hours'}
+        subtitle={
+          isAdminOnly ? 'View organization attendance records'
+            : isTeamLead ? 'View your team attendance records'
+              : isHr ? 'View employee attendance records'
+                : 'Track your daily attendance and working hours'
+        }
         breadcrumb={[{ label: 'Attendance', path: '/attendance' }]}
       />
 
@@ -354,7 +359,7 @@ const Attendance = () => {
               />
             </Box>
           )}
-          {(isAdminOnly || canViewOrg) && (
+          {(isAdminOnly || isHr) && (
             <Button variant="outlined" startIcon={<Download size={18} />} onClick={handleExport} sx={{ flexShrink: 0 }}>
               Export
             </Button>

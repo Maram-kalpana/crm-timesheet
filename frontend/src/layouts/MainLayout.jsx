@@ -20,7 +20,7 @@ const MainLayout = () => {
       />
       <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Navbar onMenuClick={() => setMobileOpen(true)} sidebarWidth={sidebarWidth} />
-        <Box component="main" sx={{ flex: 1, p: { xs: 2, sm: 3 }, overflow: 'auto' }}>
+        <Box component="main" sx={{ flex: 1, px: { xs: 2, sm: 2.5 }, pt: 1.5, pb: { xs: 2, sm: 2.5 }, overflow: 'auto' }}>
           <Fade in timeout={300}>
             <Box><Outlet /></Box>
           </Fade>

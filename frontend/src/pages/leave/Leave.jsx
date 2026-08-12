@@ -1,20 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Grid, Box, Typography } from '@mui/material';
-import { Plus } from 'lucide-react';
+import { Plus, CalendarDays } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useForm, Controller } from 'react-hook-form';
 import { useAuth } from '../../context/AuthContext';
 import { leaveAPI } from '../../services/services';
 import {
-  PageHeader, Card, StatCard, DataTable, Button, Modal, Input, Select,
+  Card, StatCard, DataTable, Button, Modal, Input, Select,
   StatusBadge, Loader, ConfirmDialog,
 } from '../../components/ui';
-import { colors } from '../../theme';
 import { formatDate, getErrorMessage } from '../../utils/helpers';
-import { CalendarDays } from 'lucide-react';
 
 const Leave = () => {
-  const { isAdmin, isAdminOnly, isHr, isTeamLead, isEmployee } = useAuth();
+  const { isAdminOnly, isHr, isTeamLead } = useAuth();
   const [leaves, setLeaves] = useState([]);
   const [stats, setStats] = useState(null);
   const [types, setTypes] = useState([]);
@@ -87,6 +85,15 @@ const Leave = () => {
     setConfirmAction(null);
   };
 
+  const canApplyLeave = !isAdminOnly;
+  const canApproveLeave = (row) => {
+    if (!row || row.status !== 'pending') return false;
+    if (isAdminOnly) return true;
+    if (isHr) return false;
+    if (isTeamLead) return true;
+    return false;
+  };
+
   const columns = [
     { field: 'first_name', headerName: 'Employee', renderCell: ({ row }) => `${row.first_name} ${row.last_name}` },
     { field: 'leave_type_name', headerName: 'Type' },
@@ -100,13 +107,7 @@ const Leave = () => {
 
   return (
     <Box>
-      <PageHeader
-        title="Leave Management"
-        subtitle="Apply for leave and track approvals"
-        breadcrumb={[{ label: 'Leave', path: '/leave' }]}
-      />
-
-      <Box display="flex" gap={2} mb={3} alignItems="stretch" flexWrap="nowrap">
+      <Box display="flex" gap={2} mb={2} alignItems="stretch" flexWrap="nowrap">
         {(stats?.stats || []).map((s) => (
           <Box key={s.name} sx={{ flex: 1, minWidth: 0 }}>
             <StatCard
@@ -117,7 +118,7 @@ const Leave = () => {
             />
           </Box>
         ))}
-        {!isAdminOnly && (
+        {canApplyLeave && (
           <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
             <Button startIcon={<Plus size={18} />} onClick={() => setModalOpen(true)}>
               Apply Leave
@@ -145,7 +146,7 @@ const Leave = () => {
           columns={columns}
           rows={leaves}
           actions={(row) => {
-            if (!row || row.status !== 'pending' || !(isAdminOnly || isHr || isTeamLead)) return [];
+            if (!canApproveLeave(row)) return [];
             return [
               { label: 'Approve', onClick: () => setConfirmAction({ type: 'approve', id: row.id }) },
               { label: 'Reject', onClick: () => setConfirmAction({ type: 'reject', id: row.id }) },

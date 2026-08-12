@@ -122,6 +122,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
     const project = {
       ...projects[0],
       tech_stack: typeof projects[0].tech_stack === 'string' ? JSON.parse(projects[0].tech_stack) : (projects[0].tech_stack || []),
+      member_count: members.length,
     };
 
     res.json({ success: true, data: { ...project, members, tasks, comments, updates } });
@@ -130,7 +131,8 @@ router.get('/:id', authenticate, async (req, res, next) => {
   }
 });
 
-router.post('/', authenticate, authorize('admin'), async (req, res, next) => {
+// NOTE: was authorize('admin') only — HR now also needs Add Project access.
+router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -158,6 +160,14 @@ router.post('/', authenticate, authorize('admin'), async (req, res, next) => {
     if (allMemberIds.length) {
       const values = allMemberIds.map((id) => [result.insertId, id]);
       await connection.query('INSERT INTO project_members (project_id, employee_id) VALUES ?', [values]);
+    }
+
+    if (memberOnlyIds.length) {
+      const placeholders = memberOnlyIds.map(() => '?').join(',');
+      await connection.query(
+        `UPDATE employees SET reporting_manager_id = ? WHERE id IN (${placeholders}) AND reporting_manager_id IS NULL`,
+        [teamLeadId, ...memberOnlyIds]
+      );
     }
 
     await connection.commit();
@@ -199,6 +209,54 @@ router.put('/:id', authenticate, authorize('admin', 'hr', 'manager'), async (req
     res.json({ success: true, message: 'Project updated.' });
   } catch (error) {
     next(error);
+  }
+});
+
+// NEW: delete a project. Blocked if the project has updates or documents,
+// per product decision — those need to be removed first.
+router.delete('/:id', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    const projectId = Number(req.params.id);
+
+    const [projectRows] = await pool.query('SELECT id, name FROM projects WHERE id = ?', [projectId]);
+    if (!projectRows.length) {
+      connection.release();
+      return res.status(404).json({ success: false, message: 'Project not found.' });
+    }
+
+    const [[{ updateCount }]] = await pool.query(
+      'SELECT COUNT(*) as updateCount FROM project_updates WHERE project_id = ?',
+      [projectId]
+    );
+    const [[{ docCount }]] = await pool.query(
+      'SELECT COUNT(*) as docCount FROM documents WHERE project_id = ?',
+      [projectId]
+    );
+
+    if (updateCount > 0 || docCount > 0) {
+      connection.release();
+      return res.status(400).json({
+        success: false,
+        message: 'This project has existing updates or documents and cannot be deleted. Remove them first.',
+      });
+    }
+
+    await connection.beginTransaction();
+    // Tasks, comments, and member assignments have no such restriction —
+    // they're cleared automatically as part of deleting the project.
+    await connection.query('DELETE FROM project_comments WHERE project_id = ?', [projectId]);
+    await connection.query('DELETE FROM project_tasks WHERE project_id = ?', [projectId]);
+    await connection.query('DELETE FROM project_members WHERE project_id = ?', [projectId]);
+    await connection.query('DELETE FROM projects WHERE id = ?', [projectId]);
+    await connection.commit();
+
+    res.json({ success: true, message: 'Project deleted.' });
+  } catch (error) {
+    await connection.rollback();
+    next(error);
+  } finally {
+    connection.release();
   }
 });
 

@@ -11,11 +11,30 @@ const isTeamLead = (user) => normalizeRole(user?.role) === 'team_lead';
 const isEmployee = (user) => normalizeRole(user?.role) === 'employee';
 
 const getTeamMemberIds = async (teamLeadEmpId) => {
-  const [rows] = await pool.query(
+  const [directReports] = await pool.query(
     'SELECT id FROM employees WHERE reporting_manager_id = ?',
     [teamLeadEmpId]
   );
-  return rows.map((r) => r.id);
+  const [projectMembers] = await pool.query(`
+    SELECT DISTINCT pm.employee_id AS id
+    FROM project_members pm
+    JOIN projects p ON pm.project_id = p.id
+    WHERE p.manager_id = ? AND pm.employee_id != ?
+  `, [teamLeadEmpId, teamLeadEmpId]);
+
+  const ids = new Set([
+    ...directReports.map((r) => r.id),
+    ...projectMembers.map((r) => r.id),
+  ]);
+  return Array.from(ids);
+};
+
+const getEmployeeUserRole = async (employeeId) => {
+  const [rows] = await pool.query(
+    'SELECT u.role FROM employees e JOIN users u ON e.user_id = u.id WHERE e.id = ?',
+    [employeeId]
+  );
+  return rows.length ? normalizeRole(rows[0].role) : null;
 };
 
 const canAccessEmployee = async (user, targetEmployeeId) => {
@@ -23,7 +42,10 @@ const canAccessEmployee = async (user, targetEmployeeId) => {
   const requesterEmpId = Number(user.employeeId);
 
   if (role === 'admin') return true;
-  if (role === 'hr') return true;
+  if (role === 'hr') {
+    const targetRole = await getEmployeeUserRole(targetEmployeeId);
+    return targetRole !== 'admin';
+  }
   if (role === 'team_lead') {
     if (targetEmployeeId === requesterEmpId) return true;
     const teamIds = await getTeamMemberIds(requesterEmpId);
@@ -37,8 +59,11 @@ const canAccessEmployee = async (user, targetEmployeeId) => {
 
 const scopeEmployeeList = async (user) => {
   const role = normalizeRole(user.role);
-  if (role === 'admin' || role === 'hr') {
+  if (role === 'admin') {
     return { clause: '', params: [] };
+  }
+  if (role === 'hr') {
+    return { clause: "AND u.role != 'admin'", params: [] };
   }
   if (role === 'team_lead') {
     const teamIds = await getTeamMemberIds(Number(user.employeeId));
@@ -77,6 +102,7 @@ module.exports = {
   isTeamLead,
   isEmployee,
   getTeamMemberIds,
+  getEmployeeUserRole,
   canAccessEmployee,
   scopeEmployeeList,
   generateEmployeeCode,

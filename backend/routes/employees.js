@@ -136,7 +136,12 @@ router.get('/', authenticate, async (req, res, next) => {
 
 router.get('/export', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
   try {
-    const [employees] = await pool.query(employeeQuery);
+    const scope = await scopeEmployeeList(req.user);
+    let where = 'WHERE 1=1';
+    const params = [...scope.params];
+    if (scope.clause) where += ` ${scope.clause}`;
+
+    const [employees] = await pool.query(`${employeeQuery} ${where}`, params);
     const columns = [
       { header: 'Employee ID', key: 'employee_id', width: 15 },
       { header: 'First Name', key: 'first_name', width: 20 },

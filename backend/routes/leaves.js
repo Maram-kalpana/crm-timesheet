@@ -4,6 +4,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { normalizeRole, canAccessEmployee, isAdmin, isHr, isTeamLead, getTeamMemberIds } = require('../middleware/rbac');
 const { sendLeaveNotification } = require('../utils/emailService');
 const { notifyEmployeeByEmpId } = require('../utils/notify');
+const { createNotification } = require('./notifications');
 const dayjs = require('dayjs');
 
 const router = express.Router();
@@ -78,6 +79,9 @@ router.get('/', authenticate, async (req, res, next) => {
     const role = normalizeRole(req.user.role);
 
     if (role === 'employee') {
+      where += ' AND lr.employee_id = ?';
+      params.push(req.user.employeeId);
+    } else if (role === 'hr') {
       where += ' AND lr.employee_id = ?';
       params.push(req.user.employeeId);
     } else if (role === 'team_lead') {
@@ -219,6 +223,21 @@ router.post('/', authenticate, async (req, res, next) => {
     );
 
     await connection.commit();
+
+    const requesterRole = normalizeRole(req.user.role);
+    if (requesterRole === 'hr') {
+      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'admin' AND is_active = TRUE");
+      for (const admin of admins) {
+        await createNotification(
+          admin.id,
+          'HR Leave Request',
+          'An HR team member has submitted a leave request pending your approval.',
+          'leave',
+          '/leave'
+        );
+      }
+    }
+
     res.status(201).json({ success: true, message: 'Leave request submitted.', id: result.insertId });
   } catch (error) {
     await connection.rollback();
@@ -239,6 +258,9 @@ router.put('/:id/approve', authenticate, authorize('admin', 'hr', 'manager', 'te
 
     const leave = requests[0];
     const role = normalizeRole(req.user.role);
+    if (role === 'hr') {
+      return res.status(403).json({ success: false, message: 'HR leave requests must be approved by admin.' });
+    }
     if (role === 'team_lead') {
       const teamIds = await getTeamMemberIds(Number(req.user.employeeId));
       if (!teamIds.includes(Number(leave.employee_id))) {
@@ -279,6 +301,9 @@ router.put('/:id/reject', authenticate, authorize('admin', 'hr', 'manager', 'tea
     }
 
     const role = normalizeRole(req.user.role);
+    if (role === 'hr') {
+      return res.status(403).json({ success: false, message: 'HR leave requests must be rejected by admin.' });
+    }
     if (role === 'team_lead') {
       const teamIds = await getTeamMemberIds(Number(req.user.employeeId));
       if (!teamIds.includes(Number(requests[0].employee_id))) {

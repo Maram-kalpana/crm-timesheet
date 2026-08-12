@@ -1,27 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Grid, Box, Typography, LinearProgress, ToggleButton, ToggleButtonGroup,
+  Grid, Box, Typography, LinearProgress,
   Autocomplete, TextField, Chip, Drawer, IconButton, Divider,
   Select, MenuItem, FormControl, InputLabel, FormHelperText,
 } from '@mui/material';
-import { LayoutGrid, List, Plus, X, Upload, FileText, Download, Trash2 } from 'lucide-react';
+import { Plus, X, Upload, FileText, Download, Trash2, Pencil } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useForm, Controller } from 'react-hook-form';
 import { useAuth } from '../../context/AuthContext';
 import { projectAPI, employeeAPI, documentAPI } from '../../services/services';
 import {
-  PageHeader, Card, Button, SearchBar, StatusBadge, Loader, EmptyState, Input, ConfirmDialog,
+  Card, Button, SearchBar, StatusBadge, Loader, EmptyState, Input, ConfirmDialog, DataTable,
 } from '../../components/ui';
 import { colors } from '../../theme';
 import { getErrorMessage, getFullName } from '../../utils/helpers';
-
-const KANBAN_COLUMNS = [
-  { id: 'todo', title: 'To Do', color: colors.text.secondary },
-  { id: 'in-progress', title: 'In Progress', color: colors.primary },
-  { id: 'review', title: 'Review', color: colors.warning },
-  { id: 'done', title: 'Done', color: colors.success },
-];
 
 const TECH_SUGGESTIONS = [
   'React', 'Node.js', 'Express', 'MongoDB', 'MySQL', 'PostgreSQL',
@@ -36,6 +29,21 @@ const UPDATE_STATUS_OPTIONS = [
   { value: 'completed', label: 'Completed' },
 ];
 
+// Adjust these to match your actual `status`/`priority` enum values if different.
+const PROJECT_STATUS_OPTIONS = [
+  { value: 'planning', label: 'Planning' },
+  { value: 'in-progress', label: 'In Progress' },
+  { value: 'on-hold', label: 'On Hold' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+const PROJECT_PRIORITY_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+
 const DRAWER_WIDTH = 480;
 
 const formatDate = (value) => {
@@ -43,6 +51,15 @@ const formatDate = (value) => {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
+// Backend expects YYYY-MM-DD for startDate/endDate; project.start_date may
+// come back as a full ISO/datetime string, so normalize it for the date input.
+const toDateInputValue = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
 };
 
 const DetailRow = ({ label, value }) => (
@@ -53,7 +70,9 @@ const DetailRow = ({ label, value }) => (
 );
 
 const Projects = () => {
-  const { isAdminOnly } = useAuth();
+  const { isAdminOnly, isHr } = useAuth();
+  const canManageProjects = isAdminOnly || isHr;
+
   const [projects, setProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -66,10 +85,30 @@ const Projects = () => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
+  // Synchronous guard against double-submits (fast repeated clicks fire before
+  // React re-renders the disabled button, so state alone isn't reliable here).
+  const creatingProjectRef = useRef(false);
   const { register, handleSubmit, reset, control, formState: { errors } } = useForm();
 
   // --- Initial documentation files for Add Project ---
   const [pendingDocs, setPendingDocs] = useState([]);
+
+  // --- Edit Project drawer state (shared between list and detail views) ---
+  const [editDrawerOpen, setEditDrawerOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const savingEditRef = useRef(false);
+  const {
+    register: registerEdit,
+    handleSubmit: handleSubmitEdit,
+    reset: resetEdit,
+    control: controlEdit,
+    formState: { errors: editErrors },
+  } = useForm();
+
+  // --- Delete Project state ---
+  const [projectDeleteId, setProjectDeleteId] = useState(null);
+  const [deletingProject, setDeletingProject] = useState(false);
 
   // --- Add Update drawer state ---
   const [updateDrawerOpen, setUpdateDrawerOpen] = useState(false);
@@ -95,22 +134,25 @@ const Projects = () => {
   const [docsLoading, setDocsLoading] = useState(false);
   const [docDeleteId, setDocDeleteId] = useState(null);
 
-  useEffect(() => {
+  const refreshProjectList = () =>
     projectAPI.getAll({ search, limit: 100 })
       .then(({ data }) => setProjects(data.data || []))
-      .catch((e) => toast.error(getErrorMessage(e)))
-      .finally(() => setLoading(false));
+      .catch((e) => toast.error(getErrorMessage(e)));
+
+  useEffect(() => {
+    setLoading(true);
+    refreshProjectList().finally(() => setLoading(false));
   }, [search]);
 
   useEffect(() => {
-    if (!isAdminOnly || !drawerOpen) return;
+    if (!canManageProjects || !(drawerOpen || editDrawerOpen)) return;
     employeeAPI.getTeamLeads()
       .then(({ data }) => setTeamLeads(data.data || []))
       .catch(() => setTeamLeads([]));
     employeeAPI.getAssignable()
       .then(({ data }) => setEmployees(data.data || []))
       .catch(() => setEmployees([]));
-  }, [isAdminOnly, drawerOpen]);
+  }, [canManageProjects, drawerOpen, editDrawerOpen]);
 
   const teamLeadOptions = teamLeads.map((e) => ({
     id: e.id,
@@ -138,7 +180,7 @@ const Projects = () => {
     try {
       const { data } = await projectAPI.getById(id);
       setSelectedProject(data.data);
-      setView('kanban');
+      setView('detail');
       fetchProjectDocs(id);
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -175,11 +217,12 @@ const Projects = () => {
   };
 
   const onSubmit = async (formData) => {
-    if (creatingProject) return;
+    if (creatingProjectRef.current) return;
     if (!formData.teamLead) {
       toast.error('Please select a team lead');
       return;
     }
+    creatingProjectRef.current = true;
     setCreatingProject(true);
     setSubmitting(true);
     try {
@@ -199,28 +242,124 @@ const Projects = () => {
 
       const newProjectId = created?.id;
 
+      // Project creation is the source of truth for success/failure here.
+      // Close the drawer and reset the form as soon as it succeeds, so a
+      // later document-upload failure can never look like the whole
+      // submission failed (which previously led to accidental re-submits
+      // and duplicate projects).
+      toast.success('Project created successfully');
+      closeAddDrawer();
+      reset();
+
       if (newProjectId && pendingDocs.length) {
+        let failedUploads = 0;
         for (const file of pendingDocs) {
           const fd = new FormData();
           fd.append('document', file);
           fd.append('projectId', newProjectId);
           fd.append('type', 'other');
           fd.append('title', file.name);
-          await documentAPI.upload(fd);
+          try {
+            await documentAPI.upload(fd);
+          } catch {
+            failedUploads += 1;
+          }
+        }
+        if (failedUploads) {
+          toast.error(`Project created, but ${failedUploads} document(s) failed to upload`);
         }
       }
 
-      toast.success('Project created successfully');
-      closeAddDrawer();
-      reset();
       setPendingDocs([]);
-      const { data } = await projectAPI.getAll({ search, limit: 100 });
-      setProjects(data.data || []);
+      await refreshProjectList();
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
+      creatingProjectRef.current = false;
       setSubmitting(false);
       setCreatingProject(false);
+    }
+  };
+
+  // --- Edit Project handlers ---
+  const openEditDrawer = (project) => {
+    setEditingProject(project);
+    resetEdit({
+      name: project.name || '',
+      description: project.description || '',
+      startDate: toDateInputValue(project.start_date),
+      endDate: toDateInputValue(project.end_date),
+      status: project.status || 'planning',
+      priority: project.priority || 'medium',
+      completionPercentage: project.completion_percentage ?? 0,
+      teamLead: project.manager_id
+        ? { id: project.manager_id, label: project.manager_name || '' }
+        : null,
+      techStack: project.tech_stack || [],
+    });
+    setEditDrawerOpen(true);
+  };
+
+  const closeEditDrawer = () => {
+    setEditDrawerOpen(false);
+    setEditingProject(null);
+  };
+
+  const onSubmitEdit = async (formData) => {
+    if (!editingProject || savingEditRef.current) return;
+    if (!formData.teamLead) {
+      toast.error('Please select a team lead');
+      return;
+    }
+    savingEditRef.current = true;
+    setSavingEdit(true);
+    try {
+      await projectAPI.update(editingProject.id, {
+        name: formData.name,
+        description: formData.description || '',
+        status: formData.status,
+        priority: formData.priority,
+        startDate: formData.startDate,
+        endDate: formData.endDate,
+        completionPercentage: Number(formData.completionPercentage) || 0,
+        teamLeadId: formData.teamLead.id,
+        techStack: formData.techStack || [],
+      });
+
+      toast.success('Project updated');
+      closeEditDrawer();
+      await refreshProjectList();
+      if (selectedProject?.id === editingProject.id) {
+        await refreshSelectedProject();
+      }
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      savingEditRef.current = false;
+      setSavingEdit(false);
+    }
+  };
+
+  // --- Delete Project handlers ---
+  const handleDeleteProject = async () => {
+    if (!projectDeleteId) return;
+    setDeletingProject(true);
+    try {
+      await projectAPI.delete(projectDeleteId);
+      toast.success('Project deleted');
+      setProjectDeleteId(null);
+      if (selectedProject?.id === projectDeleteId) {
+        setSelectedProject(null);
+        setView('list');
+      }
+      await refreshProjectList();
+    } catch (error) {
+      // Backend returns a clear message when the project has updates/documents
+      // blocking deletion — surface it directly instead of a generic error.
+      toast.error(getErrorMessage(error));
+      setProjectDeleteId(null);
+    } finally {
+      setDeletingProject(false);
     }
   };
 
@@ -293,61 +432,39 @@ const Projects = () => {
 
   if (loading) return <Loader />;
 
-  if (selectedProject && view === 'kanban') {
-    const tasksByStatus = KANBAN_COLUMNS.reduce((acc, col) => {
-      acc[col.id] = (selectedProject.tasks || []).filter((t) => t.status === col.id);
-      return acc;
-    }, {});
+  if (selectedProject && view === 'detail') {
+    const memberCount = selectedProject.member_count ?? (selectedProject.members || []).length;
+    const updateColumns = [
+      { field: 'author_name', headerName: 'Employee', minWidth: 140 },
+      { field: 'update_date', headerName: 'Date', minWidth: 110, renderCell: ({ value }) => formatDate(value) },
+      { field: 'update_text', headerName: 'Work Done', minWidth: 220 },
+      { field: 'git_repo', headerName: 'Git Repo', minWidth: 160, renderCell: ({ value }) => value || '—' },
+      { field: 'credentials', headerName: 'Credentials', minWidth: 140, renderCell: ({ value }) => value || '—' },
+      { field: 'status', headerName: 'Status', minWidth: 110, renderCell: ({ value }) => (value ? <StatusBadge status={value} label={value} /> : '—') },
+    ];
 
     return (
       <Box>
-        <PageHeader
-          title={selectedProject.name}
-          subtitle={selectedProject.description}
-          breadcrumb={[
-            { label: 'Projects', path: '/projects' },
-            { label: selectedProject.name },
-          ]}
-          action={
-            <Box display="flex" gap={1}>
-              <Button variant="outlined" onClick={() => {
-                setSelectedProject(null);
-                setView('list');
-                projectAPI.getAll({ search, limit: 100 })
-                  .then(({ data }) => setProjects(data.data || []))
-                  .catch(() => {});
-              }}>Back to List</Button>
-              <Button startIcon={<Plus size={16} />} onClick={openAddUpdateDrawer}>Add Update</Button>
-              <ToggleButtonGroup value={view} exclusive size="small">
-                <ToggleButton value="kanban"><LayoutGrid size={16} /></ToggleButton>
-                <ToggleButton value="list"><List size={16} /></ToggleButton>
-              </ToggleButtonGroup>
-            </Box>
-          }
-        />
-
-        <Grid container spacing={3} mb={3}>
-          <Grid size={{ xs: 12, md: 7 }}>
+        <Grid container spacing={2} mb={2} alignItems="stretch">
+          <Grid size={{ xs: 12, lg: 4 }}>
             <Card sx={{ height: '100%' }}>
+              <Typography fontWeight={600} mb={1}>Progress</Typography>
               <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                <Typography fontWeight={600}>Progress</Typography>
-                <Typography color="text.secondary">{selectedProject.completion_percentage ?? 0}%</Typography>
+                <StatusBadge status={selectedProject.status} />
+                <Typography variant="body2" color="text.secondary">{selectedProject.completion_percentage ?? 0}%</Typography>
               </Box>
               <LinearProgress
                 variant="determinate"
                 value={selectedProject.completion_percentage ?? 0}
-                sx={{ height: 10, borderRadius: 2 }}
+                sx={{ height: 8, borderRadius: 2, mb: 1.5 }}
               />
-              <Box display="flex" gap={2} mt={2} alignItems="center">
-                <StatusBadge status={selectedProject.status} />
-                <Typography variant="body2" color="text.secondary">
-                  {selectedProject.member_count ?? 0} members · {selectedProject.task_count ?? 0} tasks
-                </Typography>
-              </Box>
+              <Typography variant="body2" color="text.secondary">
+                {memberCount} member{memberCount === 1 ? '' : 's'}
+              </Typography>
             </Card>
           </Grid>
 
-          <Grid size={{ xs: 12, md: 5 }}>
+          <Grid size={{ xs: 12, lg: 5 }}>
             <Card title="Project Details" sx={{ height: '100%' }}>
               <DetailRow label="Team Lead" value={selectedProject.manager_name} />
               <DetailRow label="Start Date" value={formatDate(selectedProject.start_date)} />
@@ -364,70 +481,63 @@ const Projects = () => {
               </Box>
             </Card>
           </Grid>
-        </Grid>
 
-        <Grid container spacing={2}>
-          {KANBAN_COLUMNS.map((col) => (
-            <Grid key={col.id} size={{ xs: 12, sm: 6, md: 3 }}>
-              <Box sx={{ bgcolor: colors.background, borderRadius: 3, p: 2, minHeight: 400 }}>
-                <Typography fontWeight={600} color={col.color} mb={2}>{col.title} ({tasksByStatus[col.id]?.length || 0})</Typography>
-                {(tasksByStatus[col.id] || []).map((task) => (
-                  <Card key={task.id} sx={{ mb: 1.5, p: 2 }} hover={false}>
-                    <Typography variant="body2" fontWeight={500}>{task.title}</Typography>
-                    <Typography variant="caption" color="text.secondary">{task.assigned_to_name || 'Unassigned'}</Typography>
-                    <Box mt={1}><StatusBadge status={task.priority} label={task.priority} /></Box>
-                  </Card>
-                ))}
-              </Box>
-            </Grid>
-          ))}
-        </Grid>
-
-        <Grid container spacing={3} mt={2}>
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Card title="Activity Timeline">
-              {(selectedProject.updates || []).map((u) => (
-                <Box key={u.id} py={1.5} borderBottom={`1px solid ${colors.border}`}>
-                  <Box display="flex" justifyContent="space-between" alignItems="center" mb={0.5}>
-                    <Typography variant="caption" color="text.secondary">{formatDate(u.update_date)}</Typography>
-                    {u.status && <StatusBadge status={u.status} label={u.status} />}
-                  </Box>
-                  <Typography variant="body2">{u.update_text}</Typography>
-                  {u.git_repo && (
-                    <Typography variant="caption" color="text.secondary" component="div" mt={0.5}>
-                      Repo: {u.git_repo}
-                    </Typography>
-                  )}
-                  {u.credentials && (
-                    <Typography variant="caption" color="text.secondary" component="div">
-                      Credentials: {u.credentials}
-                    </Typography>
-                  )}
-                  <Typography variant="caption" color="text.secondary" component="div" mt={0.5}>
-                    {u.author_name}{u.hours_spent ? ` · ${u.hours_spent}h` : ''}
-                  </Typography>
+          <Grid size={{ xs: 12, lg: 3 }}>
+            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 1.5 }}>
+              <Button
+                variant="outlined"
+                fullWidth
+                onClick={() => {
+                  setSelectedProject(null);
+                  setView('list');
+                  refreshProjectList();
+                }}
+              >
+                Back to List
+              </Button>
+              <Button fullWidth startIcon={<Plus size={16} />} onClick={openAddUpdateDrawer}>
+                Add Update
+              </Button>
+              {canManageProjects && (
+                <Box display="flex" gap={1}>
+                  <Button
+                    variant="outlined"
+                    fullWidth
+                    startIcon={<Pencil size={16} />}
+                    onClick={() => openEditDrawer(selectedProject)}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    fullWidth
+                    startIcon={<Trash2 size={16} />}
+                    onClick={() => setProjectDeleteId(selectedProject.id)}
+                  >
+                    Delete
+                  </Button>
                 </Box>
-              ))}
-              {!selectedProject.updates?.length && <Typography color="text.secondary" variant="body2">No updates yet</Typography>}
+              )}
             </Card>
           </Grid>
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Card title="Comments">
-              {(selectedProject.comments || []).map((c) => (
-                <Box key={c.id} py={1.5} borderBottom={`1px solid ${colors.border}`}>
-                  <Typography variant="body2" fontWeight={500}>{c.author_name}</Typography>
-                  <Typography variant="body2">{c.comment}</Typography>
-                </Box>
-              ))}
-              {!selectedProject.comments?.length && <Typography color="text.secondary" variant="body2">No comments yet</Typography>}
-            </Card>
-          </Grid>
+        </Grid>
 
+        <Card title="Project Updates" sx={{ mb: 2 }}>
+          <DataTable
+            columns={updateColumns}
+            rows={selectedProject.updates || []}
+            emptyTitle="No updates yet"
+            emptyDescription="Team members can log progress using Add Update."
+          />
+        </Card>
+
+        <Grid container spacing={3}>
           <Grid size={{ xs: 12 }}>
             <Card
               title="Documents"
               action={
-                isAdminOnly && (
+                canManageProjects && (
                   <>
                     <input type="file" id="project-doc-upload" hidden onChange={handleProjectDocUpload} />
                     <label htmlFor="project-doc-upload">
@@ -463,7 +573,7 @@ const Projects = () => {
                         <IconButton size="small" component="a" href={doc.file_url} target="_blank">
                           <Download size={16} />
                         </IconButton>
-                        {isAdminOnly && (
+                        {canManageProjects && (
                           <IconButton size="small" color="error" onClick={() => setDocDeleteId(doc.id)}>
                             <Trash2 size={16} />
                           </IconButton>
@@ -586,23 +696,44 @@ const Projects = () => {
           confirmLabel="Delete"
           danger
         />
+
+        {canManageProjects && (
+          <EditProjectDrawer
+            open={editDrawerOpen}
+            onClose={closeEditDrawer}
+            editingProject={editingProject}
+            registerEdit={registerEdit}
+            controlEdit={controlEdit}
+            editErrors={editErrors}
+            handleSubmitEdit={handleSubmitEdit}
+            onSubmitEdit={onSubmitEdit}
+            savingEdit={savingEdit}
+            teamLeadOptions={teamLeadOptions}
+            formId="edit-project-form-detail"
+          />
+        )}
+
+        <ConfirmDialog
+          open={!!projectDeleteId}
+          onClose={() => setProjectDeleteId(null)}
+          onConfirm={handleDeleteProject}
+          title="Delete Project"
+          message="Are you sure you want to delete this project? This can't be undone. Projects with existing updates or documents can't be deleted — remove those first."
+          confirmLabel="Delete"
+          danger
+          loading={deletingProject}
+        />
       </Box>
     );
   }
 
   return (
     <Box>
-      <PageHeader
-        title="Projects"
-        subtitle="Manage projects and track progress"
-        breadcrumb={[{ label: 'Projects', path: '/projects' }]}
-      />
-
-      <Box display="flex" gap={2} mb={3} alignItems="center" flexWrap="nowrap">
+      <Box display="flex" gap={2} mb={2} alignItems="center" flexWrap="nowrap">
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search projects..." fullWidth />
         </Box>
-        {isAdminOnly && (
+        {canManageProjects && (
           <Button startIcon={<Plus size={18} />} onClick={openAddDrawer} sx={{ flexShrink: 0 }}>
             Add Project
           </Button>
@@ -615,15 +746,29 @@ const Projects = () => {
         <Grid container spacing={3}>
           {projects.map((p) => (
             <Grid key={p.id} size={{ xs: 12, sm: 6, lg: 4 }}>
-              <Card onClick={() => loadProject(p.id)} sx={{ cursor: 'pointer' }}>
-                <Typography variant="h6" fontWeight={600} mb={1}>{p.name}</Typography>
-                <Typography variant="body2" color="text.secondary" mb={2} sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                  {p.description}
-                </Typography>
-                <LinearProgress variant="determinate" value={p.completion_percentage} sx={{ mb: 2, borderRadius: 2, height: 8 }} />
-                <Box display="flex" justifyContent="space-between" alignItems="center">
-                  <StatusBadge status={p.status} />
-                  <Typography variant="caption" color="text.secondary">{p.completion_percentage}%</Typography>
+              <Card sx={{ cursor: 'pointer' }}>
+                <Box onClick={() => loadProject(p.id)}>
+                  <Box display="flex" alignItems="flex-start" justifyContent="space-between" gap={1} mb={1}>
+                    <Typography variant="h6" fontWeight={600}>{p.name}</Typography>
+                    {canManageProjects && (
+                      <Box display="flex" gap={0.5} flexShrink={0} onClick={(e) => e.stopPropagation()}>
+                        <IconButton size="small" onClick={() => openEditDrawer(p)} aria-label="Edit project">
+                          <Pencil size={16} />
+                        </IconButton>
+                        <IconButton size="small" color="error" onClick={() => setProjectDeleteId(p.id)} aria-label="Delete project">
+                          <Trash2 size={16} />
+                        </IconButton>
+                      </Box>
+                    )}
+                  </Box>
+                  <Typography variant="body2" color="text.secondary" mb={2} sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {p.description}
+                  </Typography>
+                  <LinearProgress variant="determinate" value={p.completion_percentage} sx={{ mb: 2, borderRadius: 2, height: 8 }} />
+                  <Box display="flex" justifyContent="space-between" alignItems="center">
+                    <StatusBadge status={p.status} />
+                    <Typography variant="caption" color="text.secondary">{p.completion_percentage}%</Typography>
+                  </Box>
                 </Box>
               </Card>
             </Grid>
@@ -631,7 +776,7 @@ const Projects = () => {
         </Grid>
       )}
 
-      {isAdminOnly && (
+      {canManageProjects && (
         <Drawer
           anchor="right"
           open={drawerOpen}
@@ -805,8 +950,209 @@ const Projects = () => {
           </Box>
         </Drawer>
       )}
+
+      {canManageProjects && (
+        <EditProjectDrawer
+          open={editDrawerOpen}
+          onClose={closeEditDrawer}
+          editingProject={editingProject}
+          registerEdit={registerEdit}
+          controlEdit={controlEdit}
+          editErrors={editErrors}
+          handleSubmitEdit={handleSubmitEdit}
+          onSubmitEdit={onSubmitEdit}
+          savingEdit={savingEdit}
+          teamLeadOptions={teamLeadOptions}
+          formId="edit-project-form-list"
+        />
+      )}
+
+      <ConfirmDialog
+        open={!!projectDeleteId}
+        onClose={() => setProjectDeleteId(null)}
+        onConfirm={handleDeleteProject}
+        title="Delete Project"
+        message="Are you sure you want to delete this project? This can't be undone. Projects with existing updates or documents can't be deleted — remove those first."
+        confirmLabel="Delete"
+        danger
+        loading={deletingProject}
+      />
     </Box>
   );
 };
+
+// Shared Edit Project drawer, rendered from both the list view and the
+// detail view (each with a distinct formId so their <form> ids never clash).
+const EditProjectDrawer = ({
+  open, onClose, editingProject, registerEdit, controlEdit, editErrors,
+  handleSubmitEdit, onSubmitEdit, savingEdit, teamLeadOptions, formId,
+}) => (
+  <Drawer
+    anchor="right"
+    open={open}
+    onClose={onClose}
+    sx={{ '& .MuiDrawer-paper': { width: { xs: '100%', sm: DRAWER_WIDTH } } }}
+  >
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', p: 3, pb: 2 }}>
+        <Box>
+          <Typography variant="h6" fontWeight={700}>Edit Project</Typography>
+          <Typography variant="body2" color="text.secondary" mt={0.5}>
+            {editingProject?.name}
+          </Typography>
+        </Box>
+        <IconButton onClick={onClose} size="small">
+          <X size={20} />
+        </IconButton>
+      </Box>
+
+      <Divider />
+
+      <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }} component="form" id={formId} onSubmit={handleSubmitEdit(onSubmitEdit)}>
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 12 }}>
+            <Input
+              label="Project Name"
+              error={editErrors.name?.message}
+              {...registerEdit('name', { required: 'Project name is required' })}
+            />
+          </Grid>
+          <Grid size={{ xs: 12 }}>
+            <Input label="Description" multiline rows={2} {...registerEdit('description')} />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <Input
+              label="Start Date"
+              type="date"
+              InputLabelProps={{ shrink: true }}
+              error={editErrors.startDate?.message}
+              {...registerEdit('startDate', { required: 'Required' })}
+            />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <Input
+              label="End Date"
+              type="date"
+              InputLabelProps={{ shrink: true }}
+              error={editErrors.endDate?.message}
+              {...registerEdit('endDate', { required: 'Required' })}
+            />
+          </Grid>
+
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <Controller
+              name="status"
+              control={controlEdit}
+              rules={{ required: 'Status is required' }}
+              render={({ field }) => (
+                <FormControl fullWidth error={!!editErrors.status}>
+                  <InputLabel id={`${formId}-status-label`}>Status</InputLabel>
+                  <Select {...field} labelId={`${formId}-status-label`} label="Status">
+                    {PROJECT_STATUS_OPTIONS.map((opt) => (
+                      <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                    ))}
+                  </Select>
+                  {editErrors.status && <FormHelperText>{editErrors.status.message}</FormHelperText>}
+                </FormControl>
+              )}
+            />
+          </Grid>
+
+          <Grid size={{ xs: 12, sm: 6 }}>
+            <Controller
+              name="priority"
+              control={controlEdit}
+              rules={{ required: 'Priority is required' }}
+              render={({ field }) => (
+                <FormControl fullWidth error={!!editErrors.priority}>
+                  <InputLabel id={`${formId}-priority-label`}>Priority</InputLabel>
+                  <Select {...field} labelId={`${formId}-priority-label`} label="Priority">
+                    {PROJECT_PRIORITY_OPTIONS.map((opt) => (
+                      <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+                    ))}
+                  </Select>
+                  {editErrors.priority && <FormHelperText>{editErrors.priority.message}</FormHelperText>}
+                </FormControl>
+              )}
+            />
+          </Grid>
+
+          <Grid size={{ xs: 12 }}>
+            <Input
+              label="Completion %"
+              type="number"
+              inputProps={{ min: 0, max: 100 }}
+              error={editErrors.completionPercentage?.message}
+              {...registerEdit('completionPercentage', {
+                min: { value: 0, message: 'Must be 0 or more' },
+                max: { value: 100, message: 'Must be 100 or less' },
+              })}
+            />
+          </Grid>
+
+          <Grid size={{ xs: 12 }}>
+            <Controller
+              name="teamLead"
+              control={controlEdit}
+              rules={{ required: 'Team lead is required' }}
+              render={({ field }) => (
+                <Autocomplete
+                  options={teamLeadOptions}
+                  getOptionLabel={(opt) => opt.label || ''}
+                  isOptionEqualToValue={(opt, val) => opt.id === val.id}
+                  value={field.value || null}
+                  onChange={(_, value) => field.onChange(value)}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Team Lead"
+                      placeholder="Select a team lead"
+                      error={!!editErrors.teamLead}
+                      helperText={editErrors.teamLead?.message || 'Only employees with Team Lead role are shown'}
+                    />
+                  )}
+                />
+              )}
+            />
+          </Grid>
+
+          <Grid size={{ xs: 12 }}>
+            <Controller
+              name="techStack"
+              control={controlEdit}
+              defaultValue={[]}
+              render={({ field }) => (
+                <Autocomplete
+                  multiple
+                  freeSolo
+                  options={TECH_SUGGESTIONS}
+                  value={field.value || []}
+                  onChange={(_, value) => field.onChange(value)}
+                  renderTags={(value, getTagProps) =>
+                    value.map((option, index) => (
+                      <Chip label={option} {...getTagProps({ index })} key={option} size="small" />
+                    ))
+                  }
+                  renderInput={(params) => (
+                    <TextField {...params} label="Tech Stack" placeholder="Type and press enter" />
+                  )}
+                />
+              )}
+            />
+          </Grid>
+        </Grid>
+      </Box>
+
+      <Divider />
+
+      <Box sx={{ p: 3, display: 'flex', justifyContent: 'flex-end', gap: 1.5 }}>
+        <Button variant="outlined" onClick={onClose} type="button">Cancel</Button>
+        <Button type="submit" form={formId} loading={savingEdit} disabled={savingEdit}>
+          Save Changes
+        </Button>
+      </Box>
+    </Box>
+  </Drawer>
+);
 
 export default Projects;

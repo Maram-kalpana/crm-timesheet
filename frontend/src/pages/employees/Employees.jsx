@@ -78,10 +78,12 @@ const Employees = () => {
     employeeAPI.getAll({ limit: 200, status: 'active' })
       .then(({ data }) => {
         const list = data.data || [];
-        setManagers(list.filter((e) => ['admin', 'hr', 'team_lead', 'manager'].includes(e.role)));
+        const managerRoles = ['hr', 'team_lead', 'manager'];
+        if (isAdminOnly) managerRoles.unshift('admin');
+        setManagers(list.filter((e) => managerRoles.includes(e.role)));
       })
       .catch(() => setManagers([]));
-  }, [modalOpen]);
+  }, [modalOpen, isAdminOnly]);
 
   useEffect(() => { fetchEmployees(); }, [search, department, status, pagination.page, pagination.limit]);
 

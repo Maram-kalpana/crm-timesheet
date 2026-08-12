@@ -45,7 +45,7 @@ const Navbar = ({ onMenuClick }) => {
         color: 'text.primary',
       }}
     >
-      <Toolbar sx={{ gap: 2 }}>
+      <Toolbar sx={{ gap: 2, minHeight: { xs: 56, sm: 60 }, py: 0.5 }}>
         <IconButton edge="start" onClick={onMenuClick} sx={{ display: { md: 'none' } }}>
           <MenuIcon size={22} />
         </IconButton>
@@ -86,14 +86,14 @@ const Navbar = ({ onMenuClick }) => {
               <Moon size={20} />
             </IconButton>
           </Tooltip>
-{/* 
+
           <Tooltip title="Notifications">
             <IconButton size="small" onClick={() => navigate('/notifications')}>
               <Badge badgeContent={unreadCount} color="error" max={99}>
                 <Bell size={20} />
               </Badge>
             </IconButton>
-          </Tooltip> */}
+          </Tooltip>
 
           <Box
             display="flex"

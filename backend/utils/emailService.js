@@ -28,19 +28,21 @@ const getTransporter = () => {
   return transporter;
 };
 
-const sendEmail = async ({ to, subject, html, text }) => {
+const sendEmail = async ({ to, cc, subject, html, text, from, attachments }) => {
   try {
     if (!isEmailConfigured()) {
       console.warn('[Email] SMTP not configured. Would send to:', to, '| Subject:', subject);
       return { success: false, skipped: true, message: 'Email service not configured' };
     }
-    console.log('[Email] Sending to:', to, '| Subject:', subject);
+    console.log('[Email] Sending to:', to, cc ? `| CC: ${cc}` : '', '| Subject:', subject);
     const info = await getTransporter().sendMail({
-      from: process.env.SMTP_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER || process.env.EMAIL_USER,
+      from: from || process.env.SMTP_FROM || process.env.EMAIL_FROM || process.env.SMTP_USER || process.env.EMAIL_USER,
       to,
+      ...(cc ? { cc } : {}),
       subject,
       html,
       text: text || html?.replace(/<[^>]+>/g, ''),
+      attachments,
     });
     console.log('[Email] Sent successfully:', info.messageId);
     return { success: true, messageId: info.messageId };
@@ -123,6 +125,23 @@ const sendPayslipNotification = async ({ to, name, month, year }) => {
   });
 };
 
+const sendTimesheetEmail = async ({ from, to, cc, subject, body, attachmentBuffer, filename }) => {
+  const htmlBody = (body || '').replace(/\n/g, '<br>');
+  return sendEmail({
+    from,
+    to,
+    cc,
+    subject: subject || 'Timesheet Submission',
+    html: `<div style="font-family:Inter,sans-serif;max-width:560px;margin:0 auto;padding:24px">${htmlBody}</div>`,
+    text: body,
+    attachments: attachmentBuffer ? [{
+      filename: filename || 'timesheet.xlsx',
+      content: attachmentBuffer,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }] : [],
+  });
+};
+
 module.exports = {
   sendEmail,
   sendWelcomeEmail,
@@ -130,5 +149,6 @@ module.exports = {
   sendResignationNotification,
   sendLeaveNotification,
   sendPayslipNotification,
+  sendTimesheetEmail,
   isEmailConfigured,
 };

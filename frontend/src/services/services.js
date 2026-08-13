@@ -89,6 +89,15 @@ export const documentAPI = {
   delete: (id) => api.delete(`/documents/${id}`),
 };
 
+export const timesheetAPI = {
+  getAll: () => api.get('/timesheets'),
+  getMy: () => api.get('/timesheets/my'),
+  getById: (id) => api.get(`/timesheets/${id}`),
+  submit: (data) => api.post('/timesheets', data),
+  sendMail: (data) => api.post('/timesheets/send-mail', data),
+  exportExcel: (data) => api.post('/timesheets/export-excel', data, { responseType: 'blob' }),
+};
+
 export const resignationAPI = {
   getAll: () => api.get('/resignations'),
   getMy: () => api.get('/resignations/my'),

@@ -20,7 +20,7 @@ const menuItems = [
   { label: 'Employees', icon: Users, path: '/employees', roles: ['admin', 'hr', 'team_lead', 'manager'] },
   { label: 'Projects', icon: FolderKanban, path: '/projects', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
   { label: 'Leave', icon: CalendarDays, path: '/leave', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
-  { label: 'Payroll', icon: Wallet, path: '/payroll', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
+  { label: 'Timesheet', icon: Wallet, path: '/payroll', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
   { label: 'Documents', icon: FileText, path: '/documents', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
   { label: 'Resignations', icon: LogOut, path: '/resignations', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
   { label: 'Notifications', icon: Bell, path: '/notifications', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },

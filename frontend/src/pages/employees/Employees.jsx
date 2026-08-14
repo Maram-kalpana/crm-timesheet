@@ -21,6 +21,7 @@ const EMPLOYEE_TYPES = [
   { value: 'employee', label: 'Employee' },
   { value: 'team_lead', label: 'Team Lead' },
   { value: 'hr', label: 'HR' },
+  { value: 'accountant', label: 'Accountant' },
 ];
 
 const Employees = () => {

@@ -9,6 +9,15 @@ const isAdmin = (user) => normalizeRole(user?.role) === 'admin';
 const isHr = (user) => normalizeRole(user?.role) === 'hr';
 const isTeamLead = (user) => normalizeRole(user?.role) === 'team_lead';
 const isEmployee = (user) => normalizeRole(user?.role) === 'employee';
+const isAccountant = (user) => normalizeRole(user?.role) === 'accountant';
+const canViewAllTimesheets = (user) => {
+  const role = normalizeRole(user?.role);
+  return role === 'admin' || role === 'hr' || role === 'accountant';
+};
+const canSendClientBilling = (user) => {
+  const role = normalizeRole(user?.role);
+  return role === 'admin' || role === 'accountant';
+};
 
 const getTeamMemberIds = async (teamLeadEmpId) => {
   const [directReports] = await pool.query(
@@ -54,6 +63,9 @@ const canAccessEmployee = async (user, targetEmployeeId) => {
   if (role === 'employee') {
     return targetEmployeeId === requesterEmpId;
   }
+  if (role === 'accountant') {
+    return targetEmployeeId === requesterEmpId;
+  }
   return false;
 };
 
@@ -74,11 +86,20 @@ const scopeEmployeeList = async (user) => {
     if (!teamIds.length) return { clause: 'AND 1=0', params: [] };
     return { clause: `AND e.id IN (${teamIds.map(() => '?').join(',')})`, params: teamIds };
   }
+  if (role === 'accountant') {
+    return { clause: 'AND 1=0', params: [] };
+  }
   return { clause: 'AND e.id = ?', params: [user.employeeId] };
 };
 
 const generateEmployeeCode = async (employeeType) => {
-  const prefix = employeeType === 'hr' ? 'HR' : employeeType === 'team_lead' ? 'TL' : employeeType === 'admin' ? 'ADM' : 'EMP';
+  const prefixMap = {
+    hr: 'HR',
+    team_lead: 'TL',
+    admin: 'ADM',
+    accountant: 'ACC',
+  };
+  const prefix = prefixMap[employeeType] || 'EMP';
   const [rows] = await pool.query(
     'SELECT employee_id FROM users WHERE employee_id LIKE ? ORDER BY employee_id DESC LIMIT 1',
     [`${prefix}%`]
@@ -104,6 +125,9 @@ module.exports = {
   isHr,
   isTeamLead,
   isEmployee,
+  isAccountant,
+  canViewAllTimesheets,
+  canSendClientBilling,
   getTeamMemberIds,
   getEmployeeUserRole,
   canAccessEmployee,

@@ -15,16 +15,16 @@ const COLLAPSED_WIDTH = 72;
 const NAVY = '#1E3A8A';
 
 const menuItems = [
-  { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
+  { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },
   { label: 'Attendance', icon: Clock, path: '/attendance', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
   { label: 'Employees', icon: Users, path: '/employees', roles: ['admin', 'hr', 'team_lead', 'manager'] },
   { label: 'Projects', icon: FolderKanban, path: '/projects', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
   { label: 'Leave', icon: CalendarDays, path: '/leave', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
-  { label: 'Timesheet', icon: Wallet, path: '/payroll', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
+  { label: 'Timesheet', icon: Wallet, path: '/payroll', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },
   { label: 'Documents', icon: FileText, path: '/documents', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
-  { label: 'Profile', icon: UserCircle, path: '/profile', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
+  { label: 'Profile', icon: UserCircle, path: '/profile', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },
   { label: 'Resignations', icon: LogOut, path: '/resignations', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
-  { label: 'Notifications', icon: Bell, path: '/notifications', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
+  { label: 'Notifications', icon: Bell, path: '/notifications', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },
 ];
 
 const Sidebar = ({ mobileOpen, onMobileClose, collapsed, onToggleCollapse }) => {

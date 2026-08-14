@@ -98,6 +98,7 @@ export const timesheetAPI = {
   getById: (id) => api.get(`/timesheets/${id}`),
   submit: (data) => api.post('/timesheets', data),
   sendMail: (data) => api.post('/timesheets/send-mail', data),
+  sendToClient: (data) => api.post('/timesheets/send-to-client', data),
   exportExcel: (data) => api.post('/timesheets/export-excel', data, { responseType: 'blob' }),
 };
 

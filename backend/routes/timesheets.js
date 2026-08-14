@@ -1,8 +1,15 @@
 const express = require('express');
 const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
+const { canViewAllTimesheets, canSendClientBilling } = require('../middleware/rbac');
 const { createNotificationForUser } = require('../utils/notify');
-const { sendTimesheetEmail, isEmailConfigured } = require('../utils/emailService');
+const {
+  sendTimesheetEmail,
+  sendClientTimesheetEmail,
+  sendCombinedClientBillingEmail,
+  buildClientTimesheetHtml,
+  isEmailConfigured,
+} = require('../utils/emailService');
 const { generateTimesheetExcel } = require('../utils/excel');
 
 const router = express.Router();
@@ -11,11 +18,13 @@ const TIMESHEET_SELECT = `
   SELECT t.*,
          e.first_name, e.last_name,
          u.employee_id AS emp_code,
-         d.name AS department_name
+         d.name AS department_name,
+         su.email AS sent_by_email
   FROM timesheets t
   JOIN employees e ON t.employee_id = e.id
   JOIN users u ON e.user_id = u.id
   LEFT JOIN departments d ON e.department_id = d.id
+  LEFT JOIN users su ON t.sent_by_user_id = su.id
 `;
 
 async function getEntries(timesheetId) {
@@ -35,6 +44,7 @@ function mapTimesheet(row, entries) {
       day: e.day_name || '',
       task: e.task_description || '',
       hrs: e.hours,
+      comments: e.comments || '',
     })),
   };
 }
@@ -48,8 +58,30 @@ function formatDisplayDate(dateVal) {
   return `${m}/${d}/${String(y).slice(-2)}`;
 }
 
-router.get('/', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
+function toTimesheetEmailPayload(row, entries) {
+  const mapped = mapTimesheet(row, entries);
+  return {
+    employeeName: `${row.first_name || ''} ${row.last_name || ''}`.trim(),
+    employeeId: row.emp_code || '',
+    client: row.client || '',
+    managerName: row.manager_name || '',
+    rateType: row.rate_type,
+    rateValue: row.rate_value,
+    periodType: row.period_type,
+    periodLabel: row.period_label || '',
+    periodStart: row.period_start,
+    periodEnd: row.period_end,
+    totalHrs: row.total_hours,
+    totalWage: row.total_wage,
+    rows: mapped.rows,
+  };
+}
+
+router.get('/', authenticate, async (req, res, next) => {
   try {
+    if (!canViewAllTimesheets(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
     const [rows] = await pool.query(`${TIMESHEET_SELECT} ORDER BY t.submitted_at DESC`);
     res.json({ success: true, data: rows });
   } catch (error) {
@@ -85,6 +117,7 @@ router.post('/export-excel', authenticate, async (req, res, next) => {
   }
 });
 
+/** Employee send-mail — client reference format only (no wages in email body). */
 router.post('/send-mail', authenticate, async (req, res, next) => {
   try {
     const {
@@ -92,7 +125,6 @@ router.post('/send-mail', authenticate, async (req, res, next) => {
       to,
       cc,
       subject,
-      body,
       employeeName,
       employeeId,
       client,
@@ -106,28 +138,28 @@ router.post('/send-mail', authenticate, async (req, res, next) => {
       rows,
     } = req.body;
 
-    if (!from || !to || !body) {
-      return res.status(400).json({ success: false, message: 'From, To, and Body are required.' });
+    if (!from || !to) {
+      return res.status(400).json({ success: false, message: 'From and To are required.' });
     }
     if (!Array.isArray(rows) || !rows.length) {
       return res.status(400).json({ success: false, message: 'Timesheet rows are required.' });
     }
 
-    const excelPayload = {
+    const emailPayload = {
       employeeName,
       employeeId,
       client,
       managerName,
-      rateType,
-      rateValue,
       periodType,
       periodLabel,
-      periodStart,
-      periodEnd,
-      rows,
+      rows: rows.map((r) => ({
+        date: r.date,
+        day: r.day,
+        hrs: r.hrs,
+        comments: r.comments || '',
+      })),
     };
 
-    const { buffer, filename } = await generateTimesheetExcel(excelPayload);
     const mailSubject = subject || `Timesheet - ${periodLabel || employeeName || 'Submission'}`;
 
     if (!isEmailConfigured()) {
@@ -135,18 +167,15 @@ router.post('/send-mail', authenticate, async (req, res, next) => {
         success: false,
         message: 'Email service is not configured. Download the Excel file and use your mail client.',
         useMailClient: true,
-        filename,
       });
     }
 
-    const result = await sendTimesheetEmail({
+    const result = await sendClientTimesheetEmail({
       from,
       to,
       cc: cc || undefined,
       subject: mailSubject,
-      body,
-      attachmentBuffer: buffer,
-      filename,
+      timesheetData: emailPayload,
     });
 
     if (!result.success) {
@@ -162,6 +191,130 @@ router.post('/send-mail', authenticate, async (req, res, next) => {
   }
 });
 
+/** Accountant/Admin — send billing to client and mark timesheets as sent. */
+router.post('/send-to-client', authenticate, async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    if (!canSendClientBilling(req.user)) {
+      connection.release();
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
+
+    const { timesheetIds, clientEmail, cc, subject } = req.body;
+    if (!Array.isArray(timesheetIds) || !timesheetIds.length) {
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Select at least one timesheet.' });
+    }
+    if (!clientEmail) {
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Client email is required.' });
+    }
+
+    const placeholders = timesheetIds.map(() => '?').join(',');
+    const [rows] = await connection.query(
+      `${TIMESHEET_SELECT} WHERE t.id IN (${placeholders})`,
+      timesheetIds
+    );
+
+    if (!rows.length) {
+      connection.release();
+      return res.status(404).json({ success: false, message: 'Timesheets not found.' });
+    }
+
+    const alreadySent = rows.filter((r) => r.sent_to_client_at);
+    if (alreadySent.length) {
+      connection.release();
+      return res.status(400).json({
+        success: false,
+        message: `Timesheet(s) already sent to client: ${alreadySent.map((r) => r.id).join(', ')}`,
+      });
+    }
+
+    const timesheetPayloads = [];
+    for (const row of rows) {
+      const entries = await getEntries(row.id);
+      timesheetPayloads.push(toTimesheetEmailPayload(row, entries));
+    }
+
+    const client = rows[0].client || '';
+    const periodLabel = rows[0].period_label || '';
+    const totalAmount = timesheetPayloads.reduce((sum, ts) => sum + (parseFloat(ts.totalWage) || 0), 0);
+
+    if (!isEmailConfigured()) {
+      connection.release();
+      return res.status(503).json({
+        success: false,
+        message: 'Email service is not configured.',
+      });
+    }
+
+    const [userRows] = await connection.query('SELECT email FROM users WHERE id = ?', [req.user.id]);
+    const from = userRows[0]?.email || process.env.SMTP_FROM || process.env.EMAIL_FROM;
+
+    const result = timesheetPayloads.length === 1
+      ? await sendClientTimesheetEmail({
+        from,
+        to: clientEmail,
+        cc: cc || undefined,
+        subject: subject || `Timesheet - ${periodLabel || client}`,
+        timesheetData: {
+          ...timesheetPayloads[0],
+          rateValue: timesheetPayloads[0].rateValue,
+          totalWage: timesheetPayloads[0].totalWage,
+        },
+      })
+      : await sendCombinedClientBillingEmail({
+        from,
+        to: clientEmail,
+        cc: cc || undefined,
+        subject: subject || `Timesheet Invoice - ${client} - ${periodLabel}`,
+        client,
+        periodLabel,
+        timesheets: timesheetPayloads.map((ts) => ({
+          employeeName: ts.employeeName,
+          employeeId: ts.employeeId,
+          totalHours: ts.totalHrs,
+          rateValue: ts.rateValue,
+          totalWage: ts.totalWage,
+          ...ts,
+        })),
+        totalAmount,
+      });
+
+    if (!result.success) {
+      connection.release();
+      return res.status(500).json({ success: false, message: result.error || 'Failed to send email.' });
+    }
+
+    await connection.beginTransaction();
+    for (const row of rows) {
+      await connection.query(
+        `UPDATE timesheets SET
+          client_email = ?,
+          sent_to_client_at = NOW(),
+          sent_by_user_id = ?,
+          amount_due = total_wage,
+          status = 'reviewed'
+         WHERE id = ?`,
+        [clientEmail, req.user.id, row.id]
+      );
+    }
+    await connection.commit();
+    connection.release();
+
+    res.json({
+      success: true,
+      message: 'Timesheet billing sent to client successfully.',
+      totalAmount,
+      sentCount: rows.length,
+    });
+  } catch (error) {
+    await connection.rollback();
+    connection.release();
+    next(error);
+  }
+});
+
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
     const [rows] = await pool.query(`${TIMESHEET_SELECT} WHERE t.id = ?`, [req.params.id]);
@@ -170,8 +323,8 @@ router.get('/:id', authenticate, async (req, res, next) => {
     }
 
     const timesheet = rows[0];
-    const isAdmin = ['admin', 'hr'].includes(req.user.role);
-    if (!isAdmin && timesheet.employee_id !== req.user.employeeId) {
+    const canViewAll = canViewAllTimesheets(req.user);
+    if (!canViewAll && timesheet.employee_id !== req.user.employeeId) {
       return res.status(403).json({ success: false, message: 'Forbidden.' });
     }
 
@@ -185,8 +338,10 @@ router.get('/:id', authenticate, async (req, res, next) => {
 router.post('/', authenticate, async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
-    if (['admin', 'hr'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, message: 'Admins cannot submit timesheets.' });
+    const role = req.user.role;
+    if (['admin', 'hr', 'accountant'].includes(role)) {
+      connection.release();
+      return res.status(403).json({ success: false, message: 'Your role cannot submit timesheets.' });
     }
 
     const empId = req.user.employeeId;
@@ -203,6 +358,7 @@ router.post('/', authenticate, async (req, res, next) => {
     } = req.body;
 
     if (!periodType || !periodStart || !periodEnd || !Array.isArray(rows) || !rows.length) {
+      connection.release();
       return res.status(400).json({
         success: false,
         message: 'Period and at least one timesheet row are required.',
@@ -240,14 +396,15 @@ router.post('/', authenticate, async (req, res, next) => {
       const row = rows[i];
       await connection.query(
         `INSERT INTO timesheet_entries
-          (timesheet_id, entry_date, day_name, task_description, hours, sort_order)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+          (timesheet_id, entry_date, day_name, task_description, hours, comments, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           timesheetId,
           row.entryDate || null,
           row.day || null,
           row.task || null,
           parseFloat(row.hrs) || 0,
+          row.comments || null,
           i,
         ]
       );
@@ -255,12 +412,12 @@ router.post('/', authenticate, async (req, res, next) => {
 
     await connection.commit();
 
-    const [admins] = await connection.query(
-      "SELECT id FROM users WHERE role IN ('admin', 'hr') AND is_active = TRUE"
+    const [notifyUsers] = await connection.query(
+      "SELECT id FROM users WHERE role IN ('admin', 'hr', 'accountant') AND is_active = TRUE"
     );
-    for (const admin of admins) {
+    for (const notifyUser of notifyUsers) {
       await createNotificationForUser(
-        admin.id,
+        notifyUser.id,
         'New Timesheet Submitted',
         'An employee submitted a timesheet for review.',
         'payroll',
@@ -268,12 +425,12 @@ router.post('/', authenticate, async (req, res, next) => {
       );
     }
 
+    connection.release();
     res.status(201).json({ success: true, message: 'Timesheet submitted.', id: timesheetId });
   } catch (error) {
     await connection.rollback();
-    next(error);
-  } finally {
     connection.release();
+    next(error);
   }
 });
 

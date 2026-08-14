@@ -68,13 +68,17 @@ export const AuthProvider = ({ children }) => {
   const isHr = role === 'hr';
   const isTeamLead = role === 'team_lead';
   const isEmployee = role === 'employee';
+  const isAccountant = role === 'accountant';
   const isAdmin = isAdminOnly || isHr;
   const isManager = isTeamLead || isAdminOnly;
+  const canViewAllTimesheets = isAdminOnly || isHr || isAccountant;
+  const canSendClientBilling = isAdminOnly || isAccountant;
 
   return (
     <AuthContext.Provider value={{
       user, loading, login, register, logout, fetchUser,
       isAdmin, isAdminOnly, isHr, isTeamLead, isEmployee, isManager,
+      isAccountant, canViewAllTimesheets, canSendClientBilling,
     }}>
       {children}
     </AuthContext.Provider>

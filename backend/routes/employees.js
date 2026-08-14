@@ -32,6 +32,7 @@ const employeeQuery = `
 const mapEmployeeTypeToRole = (type) => {
   if (type === 'hr') return 'hr';
   if (type === 'team_lead') return 'team_lead';
+  if (type === 'accountant') return 'accountant';
   return 'employee';
 };
 
@@ -80,7 +81,7 @@ router.get('/team-leads', authenticate, authorize('admin', 'hr'), async (req, re
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const role = normalizeRole(req.user.role);
-    if (role === 'employee') {
+    if (role === 'employee' || role === 'accountant') {
       return res.status(403).json({ success: false, message: 'Forbidden. Insufficient permissions.' });
     }
 

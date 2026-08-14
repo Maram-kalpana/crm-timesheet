@@ -3,9 +3,17 @@ import { toast } from "react-toastify";
 import { useAuth } from "../../context/AuthContext";
 import { timesheetAPI } from "../../services/services";
 import { getErrorMessage } from "../../utils/helpers";
+import AccountantBilling from "./AccountantBilling";
 
 const DAY_LABELS = ["Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun"];
 const DAY_NAMES = ["Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"];
+const COMMENT_OPTIONS = [
+  { value: "", label: "—" },
+  { value: "halfday", label: "Half Day" },
+  { value: "fullday", label: "Full Day" },
+  { value: "leave", label: "Leave" },
+  { value: "mandatory holiday", label: "Mandatory Holiday" },
+];
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -56,6 +64,7 @@ function buildWeeklyRows(weekValue) {
       day: DAY_LABELS[i],
       task: "",
       hrs: "",
+      comments: "",
     });
   }
   return rows;
@@ -73,6 +82,7 @@ function buildMonthlyRows(year, month) {
       day: DAY_NAMES[d.getDay()],
       task: "",
       hrs: "",
+      comments: "",
     });
   }
   return rows;
@@ -107,6 +117,9 @@ function mapListItem(row) {
       : "",
     status: row.status,
     departmentName: row.department_name || "",
+    sentToClient: !!row.sent_to_client_at,
+    sentAt: row.sent_to_client_at ? new Date(row.sent_to_client_at).toLocaleString() : "",
+    clientEmail: row.client_email || "",
   };
 }
 
@@ -152,26 +165,30 @@ function TimesheetTable({
   editable,
   onTaskChange,
   onHrsChange,
+  onCommentsChange,
   totalHrs,
   totalWage,
+  showWage = true,
 }) {
   return (
     <div style={{ border: "1px solid #e3e6ea", borderRadius: 10, overflow: "hidden", width: "100%" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15, tableLayout: "fixed" }}>
         <colgroup>
-          <col style={{ width: editable ? "11%" : "12%" }} />
-          <col style={{ width: editable ? "9%" : "10%" }} />
-          <col style={{ width: editable ? "44%" : "48%" }} />
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "18%" }} />
+          <col style={{ width: editable ? "10%" : "11%" }} />
+          <col style={{ width: editable ? "8%" : "9%" }} />
+          {showWage && <col style={{ width: editable ? "32%" : "36%" }} />}
+          <col style={{ width: "10%" }} />
+          {showWage && <col style={{ width: "14%" }} />}
+          <col style={{ width: editable ? "18%" : "20%" }} />
         </colgroup>
         <thead>
           <tr style={{ background: "#f7f8fa", color: "#6b7280" }}>
             <th style={th}>Date</th>
             <th style={th}>Day</th>
-            <th style={{ ...th, textAlign: "left" }}>Task Description</th>
+            {showWage && <th style={{ ...th, textAlign: "left" }}>Task Description</th>}
             <th style={{ ...th, background: "#e8f0fe", color: "#1c1f26" }}>Hrs</th>
-            <th style={{ ...th, background: "#e8f0fe", color: "#1c1f26" }}>Total Wage</th>
+            {showWage && <th style={{ ...th, background: "#e8f0fe", color: "#1c1f26" }}>Total Wage</th>}
+            <th style={th}>Comments</th>
           </tr>
         </thead>
         <tbody>
@@ -181,18 +198,20 @@ function TimesheetTable({
               <tr key={r.id || idx} style={{ background: idx % 2 === 0 ? "#fff" : "#fafbfc" }}>
                 <td style={td}>{r.date || "—"}</td>
                 <td style={td}>{r.day || "—"}</td>
-                <td style={{ ...td, textAlign: "left" }}>
-                  {editable ? (
-                    <input
-                      style={{ ...inputStyle, border: "none", padding: "4px 6px", background: "transparent" }}
-                      value={r.task}
-                      placeholder="Describe the task"
-                      onChange={(e) => onTaskChange(idx, e.target.value)}
-                    />
-                  ) : (
-                    r.task || "—"
-                  )}
-                </td>
+                {showWage && (
+                  <td style={{ ...td, textAlign: "left" }}>
+                    {editable ? (
+                      <input
+                        style={{ ...inputStyle, border: "none", padding: "4px 6px", background: "transparent" }}
+                        value={r.task}
+                        placeholder="Describe the task"
+                        onChange={(e) => onTaskChange(idx, e.target.value)}
+                      />
+                    ) : (
+                      r.task || "—"
+                    )}
+                  </td>
+                )}
                 <td style={td}>
                   {editable ? (
                     <input
@@ -208,16 +227,34 @@ function TimesheetTable({
                     r.hrs || 0
                   )}
                 </td>
-                <td style={{ ...td, fontVariantNumeric: "tabular-nums" }}>{wage.toFixed(2)}</td>
+                {showWage && (
+                  <td style={{ ...td, fontVariantNumeric: "tabular-nums" }}>{wage.toFixed(2)}</td>
+                )}
+                <td style={td}>
+                  {editable ? (
+                    <select
+                      style={{ ...inputStyle, padding: "6px 8px", fontSize: 13 }}
+                      value={r.comments || ""}
+                      onChange={(e) => onCommentsChange(idx, e.target.value)}
+                    >
+                      {COMMENT_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    r.comments || "—"
+                  )}
+                </td>
               </tr>
             );
           })}
           <tr style={{ background: "#f7f8fa" }}>
-            <td style={{ ...td, fontWeight: 700 }} colSpan={3}>
+            <td style={{ ...td, fontWeight: 700 }} colSpan={showWage ? 3 : 2}>
               Total
             </td>
             <td style={{ ...td, fontWeight: 700 }}>{totalHrs}</td>
-            <td style={{ ...td, fontWeight: 700 }}>{totalWage.toFixed(2)}</td>
+            {showWage && <td style={{ ...td, fontWeight: 700 }}>{totalWage.toFixed(2)}</td>}
+            <td style={td} />
           </tr>
         </tbody>
       </table>
@@ -273,7 +310,7 @@ function MailModal({ open, form, onChange, onClose, onSend, sending, periodLabel
         </div>
 
         <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 20 }}>
-          The timesheet will be attached as an Excel file ({periodLabel || "selected period"}).
+          Email uses the client timesheet format: Employee info, Date, Day, Hours, and Comments only ({periodLabel || "selected period"}).
         </p>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -310,14 +347,6 @@ function MailModal({ open, form, onChange, onClose, onSend, sending, periodLabel
               value={form.subject}
               onChange={(e) => onChange("subject", e.target.value)}
               placeholder="Timesheet subject"
-            />
-          </Field>
-          <Field label="Body">
-            <textarea
-              style={{ ...inputStyle, minHeight: 120, resize: "vertical" }}
-              value={form.body}
-              onChange={(e) => onChange("body", e.target.value)}
-              placeholder="Write your message..."
             />
           </Field>
         </div>
@@ -455,12 +484,13 @@ function ViewModal({ entry, onClose }) {
 }
 
 export default function Timesheet() {
-  const { user, isAdminOnly, isHr } = useAuth();
-  const canManage = isAdminOnly || isHr;
-  const canSubmit = !canManage;
+  const { user, isAdminOnly, isHr, isAccountant, canViewAllTimesheets, canSendClientBilling } = useAuth();
+  const canManage = canViewAllTimesheets;
+  const canSubmit = !isAdminOnly && !isHr && !isAccountant;
+  const canBill = canSendClientBilling;
 
   const now = new Date();
-  const [tab, setTab] = useState(canManage ? "history" : "new");
+  const [tab, setTab] = useState(isAccountant ? "billing" : canManage ? "history" : "new");
   const [form, setForm] = useState(emptyForm);
   const [weekValue, setWeekValue] = useState(getCurrentISOWeek());
   const [monthValue, setMonthValue] = useState(now.getMonth() + 1);
@@ -561,6 +591,14 @@ export default function Timesheet() {
     });
   };
 
+  const updateComments = (idx, value) => {
+    setRows((prev) => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], comments: value };
+      return next;
+    });
+  };
+
   const totalHrs = useMemo(
     () => rows.reduce((sum, r) => sum + (parseFloat(r.hrs) || 0), 0),
     [rows]
@@ -646,7 +684,7 @@ export default function Timesheet() {
       to: "",
       cc: "",
       subject: `Timesheet - ${periodLabel || employeeName}`,
-      body: `Hello,\n\nPlease find attached my timesheet for ${periodLabel || "the selected period"}.\n\nEmployee: ${employeeName}\nEmployee ID: ${employeeId}\nPeriod: ${periodLabel}\nTotal Hours: ${totalHrs}\nTotal Wage: ${totalWage.toFixed(2)}\n\nThank you.`,
+      body: "",
     });
     setMailOpen(true);
   };
@@ -663,8 +701,8 @@ export default function Timesheet() {
   };
 
   const handleSendMail = async () => {
-    if (!mailForm.from || !mailForm.to || !mailForm.body) {
-      toast.error("Please fill From, To, and Body");
+    if (!mailForm.from || !mailForm.to) {
+      toast.error("Please fill From and To email addresses");
       return;
     }
     setSendingMail(true);
@@ -674,22 +712,30 @@ export default function Timesheet() {
         to: mailForm.to,
         cc: mailForm.cc?.trim() || undefined,
         subject: mailForm.subject,
-        body: mailForm.body,
-        ...buildTimesheetPayload(),
+        employeeName,
+        employeeId,
+        client: form.client,
+        managerName: form.managerName,
+        rateType: form.rateType,
+        rateValue: form.rateValue,
+        periodType: form.periodType,
+        periodLabel,
+        periodStart,
+        periodEnd,
+        rows: rows.map((r) => ({
+          date: r.date,
+          day: r.day,
+          hrs: r.hrs,
+          comments: r.comments || "",
+        })),
       });
-      toast.success("Timesheet emailed successfully");
+      toast.success("Timesheet emailed successfully (client format)");
       setMailOpen(false);
     } catch (error) {
-      const useMailClient = error.response?.data?.useMailClient;
-      if (useMailClient) {
-        try {
-          await downloadExcel();
-          openMailClientFallback();
-          toast.info("Excel downloaded. Your mail app will open — please attach the downloaded file.");
-          setMailOpen(false);
-        } catch (downloadError) {
-          toast.error(getErrorMessage(downloadError));
-        }
+      if (error.response?.status === 503 && error.response?.data?.useMailClient) {
+        toast.info('SMTP not configured — opening your mail client instead');
+        openMailClientFallback();
+        setMailOpen(false);
       } else {
         toast.error(getErrorMessage(error));
       }
@@ -737,9 +783,11 @@ export default function Timesheet() {
       <div style={{ padding: "24px 32px 0" }}>
         <div style={{ fontSize: 22, fontWeight: 700, color: "#1c1f26" }}>Timesheet</div>
         <div style={{ fontSize: 14, color: "#8a8f98", marginTop: 4 }}>
-          {canManage
-            ? "Review timesheets submitted by employees"
-            : "Submit and track your work hours"}
+          {isAccountant
+            ? "Review timesheets, calculate billing, and send invoices to clients"
+            : canManage
+              ? "Review timesheets submitted by employees"
+              : "Submit and track your work hours"}
         </div>
       </div>
 
@@ -778,6 +826,24 @@ export default function Timesheet() {
         >
           {canManage ? "All Timesheets" : `History${history.length ? ` (${history.length})` : ""}`}
         </button>
+        {canBill && (
+          <button
+            type="button"
+            onClick={() => setTab("billing")}
+            style={{
+              border: "none",
+              background: "transparent",
+              padding: "10px 16px",
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: "pointer",
+              color: tab === "billing" ? "#2f6fed" : "#8a8f98",
+              borderBottom: tab === "billing" ? "2px solid #2f6fed" : "2px solid transparent",
+            }}
+          >
+            Client Billing
+          </button>
+        )}
       </div>
 
       {tab === "new" && canSubmit && (
@@ -874,6 +940,7 @@ export default function Timesheet() {
             editable
             onTaskChange={updateTask}
             onHrsChange={updateHrs}
+            onCommentsChange={updateComments}
             totalHrs={totalHrs}
             totalWage={totalWage}
           />
@@ -948,11 +1015,18 @@ export default function Timesheet() {
                     </div>
                     <div style={{ fontSize: 13, color: "#8a8f98", marginTop: 2 }}>
                       {canManage && `${entry.employeeName} · `}
+                      {entry.client && `${entry.client} · `}
                       {canManage && entry.departmentName && `${entry.departmentName} · `}
                       Submitted {entry.submittedAt}
+                      {entry.sentToClient && ` · Sent ${entry.sentAt}`}
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+                    {entry.sentToClient && (
+                      <span style={{ padding: "4px 10px", borderRadius: 6, background: "#dcfce7", color: "#166534", fontSize: 12, fontWeight: 600 }}>
+                        Sent
+                      </span>
+                    )}
                     <div style={{ textAlign: "right" }}>
                       <div style={{ fontSize: 13, color: "#8a8f98" }}>Total wage</div>
                       <div style={{ fontSize: 15, fontWeight: 600, color: "#1c1f26" }}>
@@ -979,6 +1053,22 @@ export default function Timesheet() {
                 </div>
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {tab === "billing" && canBill && (
+        <div style={{ padding: "28px 32px 32px" }}>
+          {loading ? (
+            <div style={{ textAlign: "center", color: "#8a8f98", padding: "60px 0", fontSize: 15 }}>
+              Loading timesheets...
+            </div>
+          ) : (
+            <AccountantBilling
+              history={history}
+              onRefresh={fetchHistory}
+              onView={handleView}
+            />
           )}
         </div>
       )}

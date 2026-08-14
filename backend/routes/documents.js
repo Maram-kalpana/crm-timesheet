@@ -186,6 +186,17 @@ router.get('/:id/download', authenticate, async (req, res, next) => {
           return res.status(403).json({ success: false, message: 'Access denied.' });
         }
       }
+    } else if (doc.project_update_id) {
+      const [updateRows] = await pool.query('SELECT project_id FROM project_updates WHERE id = ?', [doc.project_update_id]);
+      if (!updateRows.length) {
+        return res.status(404).json({ success: false, message: 'Document not found.' });
+      }
+      if (!isAdmin(req.user) && !isHr(req.user)) {
+        const allowed = await canAccessProject(req.user, updateRows[0].project_id);
+        if (!allowed) {
+          return res.status(403).json({ success: false, message: 'Access denied.' });
+        }
+      }
     } else if (!isAdmin(req.user) && !isHr(req.user)) {
       return res.status(403).json({ success: false, message: 'Access denied.' });
     }

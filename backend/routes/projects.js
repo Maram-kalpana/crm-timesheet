@@ -3,6 +3,7 @@ const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { normalizeRole, isAdmin, isHr, isTeamLead, getTeamMemberIds } = require('../middleware/rbac');
 const { createNotification } = require('./notifications');
+const upload = require('../middleware/upload');
 
 const router = express.Router();
 
@@ -30,6 +31,44 @@ const canAccessProject = async (user, projectId) => {
   }
 
   return false;
+};
+
+const fetchProjectUpdates = async (projectId, page = 1, limit = 10) => {
+  const offset = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+  const [[{ total }]] = await pool.query(
+    'SELECT COUNT(*) as total FROM project_updates WHERE project_id = ?',
+    [projectId]
+  );
+  const [updates] = await pool.query(`
+    SELECT u.*, CONCAT(e.first_name, ' ', e.last_name) as author_name
+    FROM project_updates u JOIN employees e ON u.employee_id = e.id
+    WHERE u.project_id = ? ORDER BY u.update_date DESC, u.created_at DESC
+    LIMIT ? OFFSET ?
+  `, [projectId, parseInt(limit, 10), offset]);
+
+  if (updates.length) {
+    const updateIds = updates.map((u) => u.id);
+    const [docs] = await pool.query(
+      `SELECT * FROM documents WHERE project_update_id IN (${updateIds.map(() => '?').join(',')}) ORDER BY created_at ASC`,
+      updateIds
+    );
+    const docsByUpdate = docs.reduce((acc, doc) => {
+      if (!acc[doc.project_update_id]) acc[doc.project_update_id] = [];
+      acc[doc.project_update_id].push(doc);
+      return acc;
+    }, {});
+    updates.forEach((u) => { u.documents = docsByUpdate[u.id] || []; });
+  }
+
+  return {
+    updates,
+    pagination: {
+      total,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+      totalPages: Math.ceil(total / parseInt(limit, 10)) || 1,
+    },
+  };
 };
 
 router.get('/', authenticate, async (req, res, next) => {
@@ -113,11 +152,9 @@ router.get('/:id', authenticate, async (req, res, next) => {
       WHERE c.project_id = ? ORDER BY c.created_at DESC LIMIT 20
     `, [req.params.id]);
 
-    const [updates] = await pool.query(`
-      SELECT u.*, CONCAT(e.first_name, ' ', e.last_name) as author_name
-      FROM project_updates u JOIN employees e ON u.employee_id = e.id
-      WHERE u.project_id = ? ORDER BY u.update_date DESC LIMIT 20
-    `, [req.params.id]);
+    const updatesPage = parseInt(req.query.updatesPage, 10) || 1;
+    const updatesLimit = parseInt(req.query.updatesLimit, 10) || 10;
+    const { updates, pagination: updatesPagination } = await fetchProjectUpdates(projectId, updatesPage, updatesLimit);
 
     const project = {
       ...projects[0],
@@ -125,7 +162,25 @@ router.get('/:id', authenticate, async (req, res, next) => {
       member_count: members.length,
     };
 
-    res.json({ success: true, data: { ...project, members, tasks, comments, updates } });
+    res.json({ success: true, data: { ...project, members, tasks, comments, updates, updatesPagination } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:id/updates', authenticate, async (req, res, next) => {
+  try {
+    const projectId = Number(req.params.id);
+    const allowed = await canAccessProject(req.user, projectId);
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: 'Forbidden. Insufficient permissions.' });
+    }
+
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const { updates, pagination } = await fetchProjectUpdates(projectId, page, limit);
+
+    res.json({ success: true, data: updates, pagination });
   } catch (error) {
     next(error);
   }
@@ -315,13 +370,19 @@ router.post('/:id/comments', authenticate, async (req, res, next) => {
   }
 });
 
-router.post('/:id/updates', authenticate, async (req, res, next) => {
+router.post('/:id/updates', authenticate, upload.array('documents', 10), async (req, res, next) => {
   try {
     const allowed = await canAccessProject(req.user, Number(req.params.id));
     if (!allowed) {
       return res.status(403).json({ success: false, message: 'Forbidden.' });
     }
-    const { updateText, hoursSpent, updateDate, gitRepo, credentials, status } = req.body;
+
+    const updateText = req.body.updateText;
+    const hoursSpent = req.body.hoursSpent;
+    const updateDate = req.body.updateDate;
+    const gitRepo = req.body.gitRepo;
+    const websiteUrl = req.body.websiteUrl;
+    const status = req.body.status;
 
     if (!updateText) {
       return res.status(400).json({ success: false, message: 'Work done is required.' });
@@ -330,9 +391,21 @@ router.post('/:id/updates', authenticate, async (req, res, next) => {
     const finalDate = updateDate || new Date().toISOString().split('T')[0];
 
     const [result] = await pool.query(
-      'INSERT INTO project_updates (project_id, employee_id, update_text, git_repo, credentials, status, hours_spent, update_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [req.params.id, req.user.employeeId, updateText, gitRepo || null, credentials || null, status || null, hoursSpent || 0, finalDate]
+      'INSERT INTO project_updates (project_id, employee_id, update_text, git_repo, website_url, credentials, status, hours_spent, update_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [req.params.id, req.user.employeeId, updateText, gitRepo || null, websiteUrl || null, null, status || null, hoursSpent || 0, finalDate]
     );
+
+    const updateId = result.insertId;
+
+    if (req.files?.length) {
+      for (const file of req.files) {
+        const fileUrl = `/uploads/documents/${file.filename}`;
+        await pool.query(
+          'INSERT INTO documents (employee_id, project_id, project_update_id, type, title, file_url, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [null, req.params.id, updateId, 'other', file.originalname, fileUrl, req.user.employeeId]
+        );
+      }
+    }
 
     if (status === 'completed') {
       await pool.query('UPDATE projects SET completion_percentage = LEAST(100, COALESCE(completion_percentage, 0) + 10), status = ? WHERE id = ?', ['in-progress', req.params.id]);
@@ -359,7 +432,7 @@ router.post('/:id/updates', authenticate, async (req, res, next) => {
     const summary = updateText.length > 100 ? `${updateText.slice(0, 100)}…` : updateText;
 
     for (const r of recipients) {
-      if (r.user_id === req.user.id) continue; // don't notify the author about their own update
+      if (r.user_id === req.user.id) continue;
       await createNotification(
         r.user_id,
         `New Update on ${projectName}`,
@@ -369,7 +442,7 @@ router.post('/:id/updates', authenticate, async (req, res, next) => {
       );
     }
 
-    res.status(201).json({ success: true, id: result.insertId });
+    res.status(201).json({ success: true, id: updateId });
   } catch (error) {
     next(error);
   }

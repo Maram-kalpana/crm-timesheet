@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Grid, Box, Typography, LinearProgress,
+  Grid, Box, Typography,
   Autocomplete, TextField, Chip, Drawer, IconButton, Divider,
   Select, MenuItem, FormControl, InputLabel, FormHelperText,
 } from '@mui/material';
@@ -14,7 +14,7 @@ import {
   Card, Button, SearchBar, StatusBadge, Loader, EmptyState, Input, ConfirmDialog, DataTable,
 } from '../../components/ui';
 import { colors } from '../../theme';
-import { getErrorMessage, getFullName } from '../../utils/helpers';
+import { getErrorMessage, getFullName, downloadBlob } from '../../utils/helpers';
 
 const TECH_SUGGESTIONS = [
   'React', 'Node.js', 'Express', 'MongoDB', 'MySQL', 'PostgreSQL',
@@ -124,10 +124,15 @@ const Projects = () => {
       date: new Date().toISOString().slice(0, 10),
       workDone: '',
       gitRepo: '',
-      credentials: '',
+      websiteUrl: '',
       status: 'in-progress',
     },
   });
+
+  const [pendingUpdateDocs, setPendingUpdateDocs] = useState([]);
+  const [projectUpdates, setProjectUpdates] = useState([]);
+  const [updatesPagination, setUpdatesPagination] = useState({ total: 0, page: 1, limit: 10, totalPages: 1 });
+  const [updatesLoading, setUpdatesLoading] = useState(false);
 
   // --- Project documents ---
   const [projectDocs, setProjectDocs] = useState([]);
@@ -176,10 +181,25 @@ const Projects = () => {
     }
   };
 
-  const loadProject = async (id) => {
+  const fetchProjectUpdates = async (projectId, page = 1, limit = 10) => {
+    setUpdatesLoading(true);
     try {
-      const { data } = await projectAPI.getById(id);
+      const { data } = await projectAPI.getUpdates(projectId, { page, limit });
+      setProjectUpdates(data.data || []);
+      setUpdatesPagination(data.pagination || { total: 0, page: 1, limit: 10, totalPages: 1 });
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setUpdatesLoading(false);
+    }
+  };
+
+  const loadProject = async (id, updatesPage = 1, updatesLimit = 10) => {
+    try {
+      const { data } = await projectAPI.getById(id, { updatesPage, updatesLimit });
       setSelectedProject(data.data);
+      setProjectUpdates(data.data.updates || []);
+      setUpdatesPagination(data.data.updatesPagination || { total: 0, page: 1, limit: 10, totalPages: 1 });
       setView('detail');
       fetchProjectDocs(id);
     } catch (error) {
@@ -369,9 +389,10 @@ const Projects = () => {
       date: new Date().toISOString().slice(0, 10),
       workDone: '',
       gitRepo: '',
-      credentials: '',
+      websiteUrl: '',
       status: 'in-progress',
     });
+    setPendingUpdateDocs([]);
     setUpdateDrawerOpen(true);
   };
 
@@ -379,21 +400,43 @@ const Projects = () => {
     setUpdateDrawerOpen(false);
   };
 
+  const handleUpdateDocSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    setPendingUpdateDocs((prev) => [...prev, ...files]);
+    e.target.value = '';
+  };
+
+  const removePendingUpdateDoc = (index) => {
+    setPendingUpdateDocs((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleUpdateDocDownload = async (doc) => {
+    try {
+      const { data } = await documentAPI.download(doc.id);
+      downloadBlob(data, doc.title || 'document');
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
   const onSubmitUpdate = async (formData) => {
     if (!selectedProject) return;
     setSubmittingUpdate(true);
     try {
-      await projectAPI.addUpdate(selectedProject.id, {
-        updateDate: formData.date,
-        updateText: formData.workDone,
-        gitRepo: formData.gitRepo || '',
-        credentials: formData.credentials || '',
-        status: formData.status,
-      });
+      const fd = new FormData();
+      fd.append('updateDate', formData.date);
+      fd.append('updateText', formData.workDone);
+      if (formData.gitRepo) fd.append('gitRepo', formData.gitRepo);
+      if (formData.websiteUrl) fd.append('websiteUrl', formData.websiteUrl);
+      fd.append('status', formData.status);
+      pendingUpdateDocs.forEach((file) => fd.append('documents', file));
+
+      await projectAPI.addUpdate(selectedProject.id, fd);
 
       toast.success('Update added — admin and team lead have been notified');
       closeAddUpdateDrawer();
       await refreshSelectedProject();
+      await fetchProjectUpdates(selectedProject.id, updatesPagination.page, updatesPagination.limit);
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -434,43 +477,79 @@ const Projects = () => {
 
   if (selectedProject && view === 'detail') {
     const memberCount = selectedProject.member_count ?? (selectedProject.members || []).length;
+    const projectOnlyDocs = projectDocs.filter((d) => !d.project_update_id);
+
+    const renderUrl = (value) => {
+      if (!value) return '—';
+      return (
+        <Typography
+          component="a"
+          href={value.startsWith('http') ? value : `https://${value}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          variant="body2"
+          color="primary"
+          sx={{ textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+        >
+          {value}
+        </Typography>
+      );
+    };
+
     const updateColumns = [
       { field: 'author_name', headerName: 'Employee', minWidth: 140 },
       { field: 'update_date', headerName: 'Date', minWidth: 110, renderCell: ({ value }) => formatDate(value) },
       { field: 'update_text', headerName: 'Work Done', minWidth: 220 },
-      { field: 'git_repo', headerName: 'Git Repo', minWidth: 160, renderCell: ({ value }) => value || '—' },
-      { field: 'credentials', headerName: 'Credentials', minWidth: 140, renderCell: ({ value }) => value || '—' },
+      { field: 'git_repo', headerName: 'Git Repo', minWidth: 160, renderCell: ({ value }) => renderUrl(value) },
+      {
+        field: 'website_url',
+        headerName: 'Website URL',
+        minWidth: 160,
+        renderCell: ({ row, value }) => renderUrl(value || row.credentials),
+      },
+      {
+        field: 'documents',
+        headerName: 'Documents',
+        minWidth: 180,
+        renderCell: ({ row }) => {
+          const docs = row.documents || [];
+          if (!docs.length) return '—';
+          return (
+            <Box display="flex" flexDirection="column" gap={0.5}>
+              {docs.map((doc) => (
+                <Typography
+                  key={doc.id}
+                  component="button"
+                  onClick={() => handleUpdateDocDownload(doc)}
+                  variant="caption"
+                  color="primary"
+                  sx={{ border: 'none', bgcolor: 'transparent', cursor: 'pointer', textAlign: 'left', p: 0 }}
+                >
+                  {doc.title}
+                </Typography>
+              ))}
+            </Box>
+          );
+        },
+      },
       { field: 'status', headerName: 'Status', minWidth: 110, renderCell: ({ value }) => (value ? <StatusBadge status={value} label={value} /> : '—') },
     ];
 
     return (
       <Box>
         <Grid container spacing={2} mb={2} alignItems="stretch">
-          <Grid size={{ xs: 12, lg: 4 }}>
-            <Card sx={{ height: '100%' }}>
-              <Typography fontWeight={600} mb={1}>Progress</Typography>
-              <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                <StatusBadge status={selectedProject.status} />
-                <Typography variant="body2" color="text.secondary">{selectedProject.completion_percentage ?? 0}%</Typography>
-              </Box>
-              <LinearProgress
-                variant="determinate"
-                value={selectedProject.completion_percentage ?? 0}
-                sx={{ height: 8, borderRadius: 2, mb: 1.5 }}
-              />
-              <Typography variant="body2" color="text.secondary">
-                {memberCount} member{memberCount === 1 ? '' : 's'}
-              </Typography>
-            </Card>
-          </Grid>
-
+          {/* Project Details */}
           <Grid size={{ xs: 12, lg: 5 }}>
-            <Card title="Project Details" sx={{ height: '100%' }}>
+            <Card title={selectedProject.name} sx={{ height: '100%' }}>
+              <Typography variant="body2" color="text.secondary" mb={1.5} sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                {selectedProject.description || 'No description'}
+              </Typography>
+              <DetailRow label="Status" value={<StatusBadge status={selectedProject.status} />} />
               <DetailRow label="Team Lead" value={selectedProject.manager_name} />
               <DetailRow label="Start Date" value={formatDate(selectedProject.start_date)} />
               <DetailRow label="End Date" value={formatDate(selectedProject.end_date)} />
               <Box py={0.75}>
-                <Typography variant="body2" color="text.secondary" mb={0.75}>Tech Stack</Typography>
+                <Typography variant="body2" color="text.secondary" mb={0.75}>Tech Stack · {memberCount} member{memberCount === 1 ? '' : 's'}</Typography>
                 <Box display="flex" flexWrap="wrap" gap={0.75}>
                   {(selectedProject.tech_stack || []).length
                     ? selectedProject.tech_stack.map((t) => (
@@ -482,6 +561,64 @@ const Projects = () => {
             </Card>
           </Grid>
 
+          {/* Project Documents */}
+          <Grid size={{ xs: 12, lg: 4 }}>
+            <Card title="Documents of the Project" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }} action={
+              canManageProjects && (
+                <>
+                  <input type="file" id="project-doc-upload" hidden onChange={handleProjectDocUpload} accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.xls,.xlsx" />
+                  <label htmlFor="project-doc-upload">
+                    <Button component="span" size="small" startIcon={<Upload size={16} />}>Upload</Button>
+                  </label>
+                </>
+              )
+            }>
+              <Box sx={{
+                flex: 1,
+                maxHeight: 220,
+                overflowY: 'auto',
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none',
+                '&::-webkit-scrollbar': { display: 'none' },
+              }}>
+                {docsLoading ? (
+                  <Typography variant="body2" color="text.secondary">Loading…</Typography>
+                ) : !projectOnlyDocs.length ? (
+                  <Typography variant="body2" color="text.secondary">No documents uploaded yet.</Typography>
+                ) : (
+                  <Box display="flex" flexDirection="column" gap={1}>
+                    {projectOnlyDocs.map((doc) => (
+                      <Box
+                        key={doc.id}
+                        display="flex"
+                        alignItems="center"
+                        gap={1}
+                        p={1}
+                        border={`1px solid ${colors.border}`}
+                        borderRadius={2}
+                      >
+                        <FileText size={16} color={colors.primary} />
+                        <Box flex={1} minWidth={0}>
+                          <Typography variant="body2" fontWeight={500} noWrap>{doc.title}</Typography>
+                          <Typography variant="caption" color="text.secondary">{formatDate(doc.created_at)}</Typography>
+                        </Box>
+                        <IconButton size="small" onClick={() => handleUpdateDocDownload(doc)}>
+                          <Download size={14} />
+                        </IconButton>
+                        {canManageProjects && (
+                          <IconButton size="small" color="error" onClick={() => setDocDeleteId(doc.id)}>
+                            <Trash2 size={14} />
+                          </IconButton>
+                        )}
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+              </Box>
+            </Card>
+          </Grid>
+
+          {/* Actions */}
           <Grid size={{ xs: 12, lg: 3 }}>
             <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 1.5 }}>
               <Button
@@ -499,25 +636,14 @@ const Projects = () => {
                 Add Update
               </Button>
               {canManageProjects && (
-                <Box display="flex" gap={1}>
-                  <Button
-                    variant="outlined"
-                    fullWidth
-                    startIcon={<Pencil size={16} />}
-                    onClick={() => openEditDrawer(selectedProject)}
-                  >
-                    Edit
+                <>
+                  <Button variant="outlined" fullWidth startIcon={<Pencil size={16} />} onClick={() => openEditDrawer(selectedProject)}>
+                    Edit Project
                   </Button>
-                  <Button
-                    variant="outlined"
-                    color="error"
-                    fullWidth
-                    startIcon={<Trash2 size={16} />}
-                    onClick={() => setProjectDeleteId(selectedProject.id)}
-                  >
-                    Delete
+                  <Button variant="outlined" color="error" fullWidth startIcon={<Trash2 size={16} />} onClick={() => setProjectDeleteId(selectedProject.id)}>
+                    Delete Project
                   </Button>
-                </Box>
+                </>
               )}
             </Card>
           </Grid>
@@ -526,66 +652,15 @@ const Projects = () => {
         <Card title="Project Updates" sx={{ mb: 2 }}>
           <DataTable
             columns={updateColumns}
-            rows={selectedProject.updates || []}
+            rows={projectUpdates}
+            loading={updatesLoading}
             emptyTitle="No updates yet"
             emptyDescription="Team members can log progress using Add Update."
+            pagination={updatesPagination}
+            onPageChange={(page) => fetchProjectUpdates(selectedProject.id, page, updatesPagination.limit)}
+            onRowsPerPageChange={(limit) => fetchProjectUpdates(selectedProject.id, 1, limit)}
           />
         </Card>
-
-        <Grid container spacing={3}>
-          <Grid size={{ xs: 12 }}>
-            <Card
-              title="Documents"
-              action={
-                canManageProjects && (
-                  <>
-                    <input type="file" id="project-doc-upload" hidden onChange={handleProjectDocUpload} />
-                    <label htmlFor="project-doc-upload">
-                      <Button component="span" size="small" startIcon={<Upload size={16} />}>Upload</Button>
-                    </label>
-                  </>
-                )
-              }
-            >
-              {docsLoading ? (
-                <Typography variant="body2" color="text.secondary">Loading documents…</Typography>
-              ) : !projectDocs.length ? (
-                <Typography variant="body2" color="text.secondary">No documents uploaded yet.</Typography>
-              ) : (
-                <Grid container spacing={2}>
-                  {projectDocs.map((doc) => (
-                    <Grid key={doc.id} size={{ xs: 12, sm: 6, md: 4 }}>
-                      <Box
-                        display="flex"
-                        alignItems="center"
-                        gap={1.5}
-                        p={1.5}
-                        border={`1px solid ${colors.border}`}
-                        borderRadius={2}
-                      >
-                        <Box sx={{ width: 36, height: 36, borderRadius: 2, bgcolor: `${colors.primary}12`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                          <FileText size={18} color={colors.primary} />
-                        </Box>
-                        <Box flex={1} minWidth={0}>
-                          <Typography variant="body2" fontWeight={500} noWrap>{doc.title}</Typography>
-                          <Typography variant="caption" color="text.secondary">{formatDate(doc.created_at)}</Typography>
-                        </Box>
-                        <IconButton size="small" component="a" href={doc.file_url} target="_blank">
-                          <Download size={16} />
-                        </IconButton>
-                        {canManageProjects && (
-                          <IconButton size="small" color="error" onClick={() => setDocDeleteId(doc.id)}>
-                            <Trash2 size={16} />
-                          </IconButton>
-                        )}
-                      </Box>
-                    </Grid>
-                  ))}
-                </Grid>
-              )}
-            </Card>
-          </Grid>
-        </Grid>
 
         {/* Add Update Drawer */}
         <Drawer
@@ -609,7 +684,14 @@ const Projects = () => {
 
             <Divider />
 
-            <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
+            <Box sx={{
+              flex: 1,
+              overflowY: 'auto',
+              p: 3,
+              scrollbarWidth: 'none',
+              msOverflowStyle: 'none',
+              '&::-webkit-scrollbar': { display: 'none' },
+            }}>
               <Grid container spacing={2}>
                 <Grid size={{ xs: 12 }}>
                   <Input
@@ -634,21 +716,59 @@ const Projects = () => {
 
                 <Grid size={{ xs: 12 }}>
                   <Input
-                    label="Git Repo"
+                    label="Git Repo (optional)"
                     placeholder="https://github.com/org/repo"
-                    error={updateErrors.gitRepo?.message}
                     {...registerUpdate('gitRepo')}
                   />
                 </Grid>
 
                 <Grid size={{ xs: 12 }}>
                   <Input
-                    label="Credentials (if any)"
-                    placeholder="e.g. staging login, API keys location"
-                    multiline
-                    rows={2}
-                    {...registerUpdate('credentials')}
+                    label="Website URL (optional)"
+                    placeholder="https://example.com"
+                    {...registerUpdate('websiteUrl')}
                   />
+                </Grid>
+
+                <Grid size={{ xs: 12 }}>
+                  <Typography variant="body2" fontWeight={500} mb={1}>Upload Documents (optional)</Typography>
+                  <Typography variant="caption" color="text.secondary" display="block" mb={1}>
+                    PDF, Word, Excel, or image files
+                  </Typography>
+                  <input
+                    type="file"
+                    id="update-doc-upload"
+                    hidden
+                    multiple
+                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.xls,.xlsx"
+                    onChange={handleUpdateDocSelect}
+                  />
+                  <label htmlFor="update-doc-upload">
+                    <Button component="span" variant="outlined" startIcon={<Upload size={16} />} size="small">
+                      Add Files
+                    </Button>
+                  </label>
+                  <Box mt={1} display="flex" flexDirection="column" gap={1}>
+                    {pendingUpdateDocs.map((file, index) => (
+                      <Box
+                        key={index}
+                        display="flex"
+                        alignItems="center"
+                        justifyContent="space-between"
+                        p={1}
+                        border={`1px solid ${colors.border}`}
+                        borderRadius={2}
+                      >
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <FileText size={16} />
+                          <Typography variant="body2" noWrap>{file.name}</Typography>
+                        </Box>
+                        <IconButton size="small" color="error" onClick={() => removePendingUpdateDoc(index)}>
+                          <X size={14} />
+                        </IconButton>
+                      </Box>
+                    ))}
+                  </Box>
                 </Grid>
 
                 <Grid size={{ xs: 12 }}>
@@ -764,11 +884,7 @@ const Projects = () => {
                   <Typography variant="body2" color="text.secondary" mb={2} sx={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                     {p.description}
                   </Typography>
-                  <LinearProgress variant="determinate" value={p.completion_percentage} sx={{ mb: 2, borderRadius: 2, height: 8 }} />
-                  <Box display="flex" justifyContent="space-between" alignItems="center">
-                    <StatusBadge status={p.status} />
-                    <Typography variant="caption" color="text.secondary">{p.completion_percentage}%</Typography>
-                  </Box>
+                  <StatusBadge status={p.status} />
                 </Box>
               </Card>
             </Grid>

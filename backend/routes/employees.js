@@ -208,7 +208,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
         leaves,
         projects,
         documents: isAdmin(req.user) || isHr(req.user) || empId === req.user.employeeId ? documents : [],
-        salary: isAdmin(req.user) || isHr(req.user) ? salary[0] || null : null,
+        salary: isAdmin(req.user) || isHr(req.user) || empId === req.user.employeeId ? salary[0] || null : null,
         teamMembers,
       },
     });
@@ -399,7 +399,7 @@ router.put('/:id/team', authenticate, authorize('admin'), async (req, res, next)
   }
 });
 
-router.put('/:id', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
+router.put('/:id', authenticate, async (req, res, next) => {
   try {
     const empId = Number(req.params.id);
     const allowed = await canAccessEmployee(req.user, empId);
@@ -407,21 +407,34 @@ router.put('/:id', authenticate, authorize('admin', 'hr'), async (req, res, next
       return res.status(403).json({ success: false, message: 'Forbidden.' });
     }
 
+    const role = normalizeRole(req.user.role);
+    const isSelf = empId === Number(req.user.employeeId);
+    const isManager = role === 'admin' || role === 'hr';
+
+    if (!isSelf && !isManager) {
+      return res.status(403).json({ success: false, message: 'Forbidden. Insufficient permissions.' });
+    }
+
     const fields = req.body;
-    const allowedFields = [
+    const adminFields = [
       'first_name', 'last_name', 'phone', 'department_id', 'designation', 'joining_date',
       'employment_type', 'reporting_manager_id', 'date_of_birth', 'gender', 'address',
       'city', 'state', 'country', 'pincode', 'bank_name', 'bank_account_number', 'bank_ifsc',
       'bank_branch', 'bank_account_holder', 'pan_number', 'aadhar_number',
       'emergency_contact_name', 'emergency_contact_phone', 'employment_status',
     ];
+    const selfFields = [
+      'first_name', 'last_name', 'phone', 'date_of_birth', 'gender', 'address',
+      'city', 'state', 'country', 'pincode', 'emergency_contact_name', 'emergency_contact_phone',
+    ];
 
+    const allowedFields = isManager ? adminFields : selfFields;
     const updates = [];
     const values = [];
     allowedFields.forEach((key) => {
       if (fields[key] !== undefined) {
         updates.push(`${key} = ?`);
-        values.push(fields[key]);
+        values.push(fields[key] === '' ? null : fields[key]);
       }
     });
 

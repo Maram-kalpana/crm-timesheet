@@ -4,13 +4,14 @@ import {
   Box, Grid, Stepper, Step, StepLabel, Typography, ToggleButton, ToggleButtonGroup,
   Checkbox, FormControlLabel, FormGroup,
 } from '@mui/material';
-import { Plus, Upload, FileText, Trash2 } from 'lucide-react';
+import { Plus, Upload, FileText, Trash2, Pencil } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useForm, Controller } from 'react-hook-form';
 import { useAuth } from '../../context/AuthContext';
 import { employeeAPI, departmentAPI, documentAPI } from '../../services/services';
+import EmployeeEditModal from '../../components/employees/EmployeeEditModal';
 import {
-  PageHeader, DataTable, SearchBar, Select, Button, Modal, Input, Avatar, StatusBadge, Loader,
+  PageHeader, DataTable, SearchBar, Select, Button, Modal, Input, Avatar, StatusBadge, Loader, ConfirmDialog,
 } from '../../components/ui';
 import { getFullName, getErrorMessage, downloadBlob } from '../../utils/helpers';
 
@@ -45,6 +46,10 @@ const Employees = () => {
   const [employeeType, setEmployeeType] = useState('employee');
   const [selectedTeamIds, setSelectedTeamIds] = useState([]);
   const [credentialsInfo, setCredentialsInfo] = useState(null);
+  const [editEmployee, setEditEmployee] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deactivateId, setDeactivateId] = useState(null);
+  const [deactivating, setDeactivating] = useState(false);
 
   const { register, handleSubmit, reset, control, watch, formState: { errors } } = useForm();
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -74,7 +79,7 @@ const Employees = () => {
   }, []);
 
   useEffect(() => {
-    if (!modalOpen) return;
+    if (!modalOpen && !editEmployee) return;
     employeeAPI.getAll({ limit: 200, status: 'active' })
       .then(({ data }) => {
         const list = data.data || [];
@@ -83,7 +88,7 @@ const Employees = () => {
         setManagers(list.filter((e) => managerRoles.includes(e.role)));
       })
       .catch(() => setManagers([]));
-  }, [modalOpen, isAdminOnly]);
+  }, [modalOpen, editEmployee, isAdminOnly]);
 
   useEffect(() => { fetchEmployees(); }, [search, department, status, pagination.page, pagination.limit]);
 
@@ -215,6 +220,45 @@ const Employees = () => {
     }
   };
 
+  const handleSaveEdit = async (payload) => {
+    if (!editEmployee) return;
+    setSavingEdit(true);
+    try {
+      await employeeAPI.update(editEmployee.id, payload);
+      toast.success('Employee updated');
+      setEditEmployee(null);
+      fetchEmployees();
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleDeactivate = async () => {
+    if (!deactivateId) return;
+    setDeactivating(true);
+    try {
+      await employeeAPI.delete(deactivateId);
+      toast.success('Employee deactivated');
+      setDeactivateId(null);
+      fetchEmployees();
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setDeactivating(false);
+    }
+  };
+
+  const openEdit = async (row) => {
+    try {
+      const { data } = await employeeAPI.getById(row.id);
+      setEditEmployee(data.data);
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    }
+  };
+
   const columns = [
     {
       field: 'first_name',
@@ -320,7 +364,31 @@ const Employees = () => {
         onExport={isAdminOnly || isHr ? handleExport : undefined}
         actions={(row) => row ? [
           { label: 'View Profile', onClick: () => navigate(`/employees/${row.id}`) },
+          ...(isAdminOnly || isHr ? [{ label: 'Edit', onClick: () => openEdit(row) }] : []),
+          ...(isAdminOnly && row.role !== 'admin' ? [{ label: 'Deactivate', onClick: () => setDeactivateId(row.id) }] : []),
         ] : []}
+      />
+
+      <EmployeeEditModal
+        open={!!editEmployee}
+        onClose={() => setEditEmployee(null)}
+        employee={editEmployee}
+        departments={departments}
+        managers={managers}
+        isAdminMode
+        onSubmit={handleSaveEdit}
+        loading={savingEdit}
+      />
+
+      <ConfirmDialog
+        open={!!deactivateId}
+        onClose={() => setDeactivateId(null)}
+        onConfirm={handleDeactivate}
+        title="Deactivate Employee"
+        message="Are you sure you want to deactivate this employee? They will no longer be able to log in."
+        confirmLabel="Deactivate"
+        danger
+        loading={deactivating}
       />
 
       <Modal

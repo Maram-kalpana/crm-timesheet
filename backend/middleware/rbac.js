@@ -59,17 +59,20 @@ const canAccessEmployee = async (user, targetEmployeeId) => {
 
 const scopeEmployeeList = async (user) => {
   const role = normalizeRole(user.role);
+  const requesterEmpId = Number(user.employeeId);
+
   if (role === 'admin') {
-    return { clause: '', params: [] };
-  }
-  if (role === 'hr') {
+    // Admin is not an employee — exclude admin accounts from the employees list
     return { clause: "AND u.role != 'admin'", params: [] };
   }
+  if (role === 'hr') {
+    // HR list excludes admin and the HR user's own record
+    return { clause: "AND u.role != 'admin' AND e.id != ?", params: [requesterEmpId] };
+  }
   if (role === 'team_lead') {
-    const teamIds = await getTeamMemberIds(Number(user.employeeId));
-    const ids = [Number(user.employeeId), ...teamIds];
-    if (!ids.length) return { clause: 'AND e.id = ?', params: [user.employeeId] };
-    return { clause: `AND e.id IN (${ids.map(() => '?').join(',')})`, params: ids };
+    const teamIds = await getTeamMemberIds(requesterEmpId);
+    if (!teamIds.length) return { clause: 'AND 1=0', params: [] };
+    return { clause: `AND e.id IN (${teamIds.map(() => '?').join(',')})`, params: teamIds };
   }
   return { clause: 'AND e.id = ?', params: [user.employeeId] };
 };

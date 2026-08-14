@@ -60,14 +60,17 @@ export const leaveAPI = {
 
 export const projectAPI = {
   getAll: (params) => api.get('/projects', { params }),
-  getById: (id) => api.get(`/projects/${id}`),
+  getById: (id, params) => api.get(`/projects/${id}`, { params }),
   create: (data) => api.post('/projects', data),
   update: (id, data) => api.put(`/projects/${id}`, data),
   delete: (id) => api.delete(`/projects/${id}`),
   createTask: (id, data) => api.post(`/projects/${id}/tasks`, data),
   updateTask: (taskId, data) => api.put(`/projects/tasks/${taskId}`, data),
   addComment: (id, data) => api.post(`/projects/${id}/comments`, data),
-  addUpdate: (id, data) => api.post(`/projects/${id}/updates`, data),
+  addUpdate: (id, data) => api.post(`/projects/${id}/updates`, data, {
+    headers: data instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : undefined,
+  }),
+  getUpdates: (id, params) => api.get(`/projects/${id}/updates`, { params }),
 };
 
 export const payrollAPI = {

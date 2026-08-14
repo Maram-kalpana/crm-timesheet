@@ -76,6 +76,20 @@ const theme = createTheme({
         },
       },
     },
+    MuiCssBaseline: {
+      styleOverrides: {
+        html: {
+          scrollbarWidth: 'none',
+          msOverflowStyle: 'none',
+        },
+        'html::-webkit-scrollbar': { display: 'none' },
+        body: {
+          scrollbarWidth: 'none',
+          msOverflowStyle: 'none',
+        },
+        'body::-webkit-scrollbar': { display: 'none' },
+      },
+    },
   },
 });
 

@@ -19,7 +19,9 @@ const Navbar = ({ onMenuClick }) => {
   const [anchorEl, setAnchorEl] = useState(null);
 
   const currentPage = menuItems.find((item) => location.pathname.startsWith(item.path));
-  const pageTitle = currentPage?.label || 'Dashboard';
+  const pageTitle = location.pathname.startsWith('/employees/')
+    ? 'Employee Profile'
+    : (currentPage?.label || 'Dashboard');
 
   useEffect(() => {
     const fetchNotifications = async () => {

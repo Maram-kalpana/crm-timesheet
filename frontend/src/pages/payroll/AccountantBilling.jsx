@@ -28,6 +28,7 @@ export default function AccountantBilling({ history, onRefresh, onView }) {
   const [cc, setCc] = useState('');
   const [subject, setSubject] = useState('');
   const [sending, setSending] = useState(false);
+  const [rateOverrides, setRateOverrides] = useState({});
 
   const groups = useMemo(() => {
     const map = new Map();
@@ -52,9 +53,20 @@ export default function AccountantBilling({ history, onRefresh, onView }) {
     [history, selected]
   );
 
+  const getEffectiveRate = (entry) => {
+    const override = rateOverrides[entry.id];
+    return override !== undefined && override !== '' ? parseFloat(override) || 0 : (parseFloat(entry.rateValue) || 0);
+  };
+
+  const getEffectiveWage = (entry) => {
+    const rate = getEffectiveRate(entry);
+    const hours = parseFloat(entry.totalHours) || 0;
+    return rate * hours;
+  };
+
   const combinedTotal = useMemo(
-    () => selectedEntries.reduce((sum, e) => sum + (parseFloat(e.totalWage) || 0), 0),
-    [selectedEntries]
+    () => selectedEntries.reduce((sum, e) => sum + getEffectiveWage(e), 0),
+    [selectedEntries, rateOverrides]
   );
 
   const toggleSelect = (id, entry) => {
@@ -101,7 +113,17 @@ export default function AccountantBilling({ history, onRefresh, onView }) {
     setClientEmail('');
     setCc('');
     setSubject(`Timesheet Invoice - ${clients[0] || 'Client'} - ${periods[0] || ''}`);
+    // Seed the rate editor with each entry's current rate.
+    const initialRates = {};
+    selectedEntries.forEach((e) => {
+      initialRates[e.id] = e.rateValue ?? '';
+    });
+    setRateOverrides(initialRates);
     setSendOpen(true);
+  };
+
+  const handleRateChange = (id, value) => {
+    setRateOverrides((prev) => ({ ...prev, [id]: value }));
   };
 
   const handleSend = async () => {
@@ -116,10 +138,15 @@ export default function AccountantBilling({ history, onRefresh, onView }) {
         clientEmail: clientEmail.trim(),
         cc: cc.trim() || undefined,
         subject: subject.trim() || undefined,
+        rateOverrides: selectedEntries.map((e) => ({
+          timesheetId: e.id,
+          rateValue: getEffectiveRate(e),
+        })),
       });
       toast.success('Billing sent to client successfully');
       setSendOpen(false);
       setSelected(new Set());
+      setRateOverrides({});
       onRefresh();
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -258,12 +285,47 @@ export default function AccountantBilling({ history, onRefresh, onView }) {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 480, padding: 28 }}
+            style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 520, padding: 28, maxHeight: '88vh', overflowY: 'auto' }}
           >
             <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Send to Client</div>
-            <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 20 }}>
-              Email will use the client timesheet format (Date, Day, Hours, Comments). Total due: ${combinedTotal.toFixed(2)}
+            <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 16 }}>
+              Excel timesheet file(s) will be attached (Date, Day, Hours, Comments). Adjust the rate per employee if needed before sending.
             </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+              {selectedEntries.map((entry) => (
+                <div
+                  key={entry.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    border: '1px solid #e3e6ea', borderRadius: 8, padding: '10px 12px',
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: '#1c1f26' }}>{entry.employeeName}</div>
+                    <div style={{ fontSize: 12, color: '#8a8f98' }}>{entry.totalHours}h · {entry.rateType}</div>
+                  </div>
+                  <div style={{ width: 120 }}>
+                    <input
+                      style={{ ...inputStyle, padding: '6px 8px', textAlign: 'right' }}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={rateOverrides[entry.id] ?? ''}
+                      onChange={(e) => handleRateChange(entry.id, e.target.value)}
+                      placeholder="Rate"
+                    />
+                  </div>
+                  <div style={{ width: 90, textAlign: 'right', fontWeight: 700, fontSize: 14 }}>
+                    ${getEffectiveWage(entry).toFixed(2)}
+                  </div>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', fontSize: 15, fontWeight: 700, marginTop: 4 }}>
+                Total due: ${combinedTotal.toFixed(2)}
+              </div>
+            </div>
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
                 <label style={{ fontSize: 14, color: '#8a8f98' }}>Client Email *</label>

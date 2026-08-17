@@ -226,58 +226,70 @@ const buildClientTimesheetHtml = (data) => {
   return `<div style="font-family:Calibri,Arial,sans-serif;padding:16px;color:#000;">${metaTable}${dataTable}${billingBlock}</div>`;
 };
 
-const sendClientTimesheetEmail = async ({ to, cc, subject, timesheetData, from }) => {
-  const html = buildClientTimesheetHtml(timesheetData);
-  return sendEmail({
+const sendClientTimesheetEmail = async ({
+  to, cc, subject, timesheetData, from, attachmentBuffer, filename, includeBilling = false,
+}) => {
+  const { generateClientTimesheetExcel } = require('./excel');
+  let buffer = attachmentBuffer;
+  let attachName = filename;
+
+  if (!buffer) {
+    const generated = await generateClientTimesheetExcel(timesheetData, { includeBilling });
+    buffer = generated.buffer;
+    attachName = generated.filename;
+  }
+
+  const period = timesheetData.periodLabel || '';
+  const name = timesheetData.employeeName || 'employee';
+  const html = `
+    <div style="font-family:Calibri,Arial,sans-serif;padding:16px;color:#000;">
+      <p>Please find the attached timesheet for <strong>${name}</strong>${period ? ` (${period})` : ''}.</p>
+      ${includeBilling && timesheetData.totalWage != null ? `<p><strong>Amount due:</strong> ${Number(timesheetData.totalWage).toFixed(2)}</p>` : ''}
+      <p style="color:#64748B;font-size:14px;">The Excel file matches the standard timesheet format (Date, Day, Hours, Comments).</p>
+    </div>`;
+
+  return sendTimesheetEmail({
     from,
     to,
     cc,
-    subject: subject || `Timesheet - ${timesheetData.periodLabel || timesheetData.employeeName || 'Submission'}`,
-    html,
-    text: `Timesheet for ${timesheetData.employeeName || 'employee'} — Period: ${timesheetData.periodLabel || ''}`,
+    subject: subject || `Timesheet - ${period || name}`,
+    htmlOverride: html,
+    attachmentBuffer: buffer,
+    filename: attachName,
   });
 };
 
-const sendCombinedClientBillingEmail = async ({ to, cc, subject, client, periodLabel, timesheets, totalAmount, from }) => {
-  const cellStyle = 'border:1px solid #000;padding:8px 12px;font-size:14px;';
-  const headerCell = `${cellStyle}font-weight:600;background:#fff;`;
+const sendCombinedClientBillingEmail = async ({
+  to, cc, subject, client, periodLabel, timesheets, totalAmount, from,
+}) => {
+  const { generateClientTimesheetExcel } = require('./excel');
 
-  let summary = `<table style="border-collapse:collapse;width:100%;max-width:720px;margin-bottom:20px;">
-    <tr><td style="${headerCell}width:180px;">Client</td><td style="${cellStyle}">${client || ''}</td></tr>
-    <tr><td style="${headerCell}">Period</td><td style="${cellStyle}">${periodLabel || ''}</td></tr>
-    <tr><td style="${headerCell}font-weight:700;">Total Amount Due</td><td style="${cellStyle}font-weight:700;">${Number(totalAmount).toFixed(2)}</td></tr>
-  </table>`;
+  const attachments = [];
+  for (const ts of timesheets) {
+    const { buffer, filename } = await generateClientTimesheetExcel({
+      ...ts,
+      rateValue: undefined,
+      totalWage: undefined,
+    });
+    attachments.push({
+      filename,
+      content: buffer,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+  }
 
-  let employeeTable = `<table style="border-collapse:collapse;width:100%;max-width:720px;margin-bottom:24px;">
-    <tr>
-      <td style="${cellStyle}font-weight:700;background:#2563EB;color:#fff;">Employee</td>
-      <td style="${cellStyle}font-weight:700;background:#2563EB;color:#fff;">Employee ID</td>
-      <td style="${cellStyle}font-weight:700;background:#2563EB;color:#fff;">Hours</td>
-      <td style="${cellStyle}font-weight:700;background:#2563EB;color:#fff;">Rate</td>
-      <td style="${cellStyle}font-weight:700;background:#2563EB;color:#fff;">Amount</td>
-    </tr>`;
+  const employeeLines = timesheets.map((ts) =>
+    `• ${ts.employeeName || ''} (${ts.employeeId || ''}): ${ts.totalHours ?? ts.totalHrs ?? 0}h — $${Number(ts.totalWage || ts.amountDue || 0).toFixed(2)}`
+  ).join('<br/>');
 
-  timesheets.forEach((ts) => {
-    employeeTable += `<tr>
-      <td style="${cellStyle}">${ts.employeeName || ''}</td>
-      <td style="${cellStyle}">${ts.employeeId || ''}</td>
-      <td style="${cellStyle}text-align:center;">${ts.totalHours ?? ts.totalHrs ?? 0}</td>
-      <td style="${cellStyle}text-align:center;">${ts.rateValue ?? 0}</td>
-      <td style="${cellStyle}text-align:center;">${Number(ts.totalWage || ts.amountDue || 0).toFixed(2)}</td>
-    </tr>`;
-  });
-  employeeTable += '</table>';
-
-  const detailSections = timesheets.map((ts) => buildClientTimesheetHtml({
-    ...ts,
-    rateValue: undefined,
-    totalWage: undefined,
-  })).join('<hr style="margin:24px 0;border:none;border-top:1px solid #ddd;"/>');
-
-  const html = `<div style="font-family:Calibri,Arial,sans-serif;padding:16px;color:#000;">
-    <h2 style="margin:0 0 16px;font-size:18px;">Timesheet Billing Summary</h2>
-    ${summary}${employeeTable}${detailSections}
-  </div>`;
+  const html = `
+    <div style="font-family:Calibri,Arial,sans-serif;padding:16px;color:#000;">
+      <p><strong>Client:</strong> ${client || ''}<br/>
+      <strong>Period:</strong> ${periodLabel || ''}<br/>
+      <strong>Total amount due:</strong> $${Number(totalAmount).toFixed(2)}</p>
+      <p>${employeeLines}</p>
+      <p style="color:#64748B;font-size:14px;">Individual timesheets are attached as Excel files (${attachments.length} file(s)).</p>
+    </div>`;
 
   return sendEmail({
     from,
@@ -285,7 +297,8 @@ const sendCombinedClientBillingEmail = async ({ to, cc, subject, client, periodL
     cc,
     subject: subject || `Timesheet Invoice - ${client || 'Client'} - ${periodLabel || ''}`,
     html,
-    text: `Billing summary for ${client}. Total amount due: ${Number(totalAmount).toFixed(2)}`,
+    text: `Billing for ${client}. Total: $${Number(totalAmount).toFixed(2)}. ${attachments.length} timesheet(s) attached.`,
+    attachments,
   });
 };
 

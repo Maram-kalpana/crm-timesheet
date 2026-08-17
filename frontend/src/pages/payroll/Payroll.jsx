@@ -310,7 +310,7 @@ function MailModal({ open, form, onChange, onClose, onSend, sending, periodLabel
         </div>
 
         <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 20 }}>
-          Email uses the client timesheet format: Employee info, Date, Day, Hours, and Comments only ({periodLabel || "selected period"}).
+          An Excel timesheet ({periodLabel || "selected period"}) will be attached — metadata, Date, Day, Hours, and Comments only (matching the standard client format).
         </p>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -504,8 +504,18 @@ export default function Timesheet() {
   const [sendingMail, setSendingMail] = useState(false);
   const [mailForm, setMailForm] = useState({ from: "", to: "", cc: "", subject: "", body: "" });
 
-  const employeeName = user ? `${user.firstName || ""} ${user.lastName || ""}`.trim() : "";
-  const employeeId = user?.employeeId || "";
+  // Editable per-timesheet snapshot of name/ID.
+  // Defaults from the logged-in user, but edits here are scoped to THIS
+  // timesheet only — they never modify the permanent employee record.
+  const [employeeName, setEmployeeName] = useState("");
+  const [employeeId, setEmployeeId] = useState("");
+
+  useEffect(() => {
+    if (user) {
+      setEmployeeName(`${user.firstName || ""} ${user.lastName || ""}`.trim());
+      setEmployeeId(user.employeeId || "");
+    }
+  }, [user]);
 
   const setField = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const rate = parseFloat(form.rateValue) || 0;
@@ -611,6 +621,12 @@ export default function Timesheet() {
     setMonthValue(now.getMonth() + 1);
     setYearValue(now.getFullYear());
     setRows(buildWeeklyRows(getCurrentISOWeek()));
+    // Reset the name/ID snapshot back to the real employee record
+    // for the next timesheet.
+    if (user) {
+      setEmployeeName(`${user.firstName || ""} ${user.lastName || ""}`.trim());
+      setEmployeeId(user.employeeId || "");
+    }
   };
 
   const handleSubmit = async () => {
@@ -621,6 +637,8 @@ export default function Timesheet() {
     setSubmitting(true);
     try {
       await timesheetAPI.submit({
+        employeeName,
+        employeeId,
         client: form.client,
         managerName: form.managerName,
         rateType: form.rateType,
@@ -647,15 +665,14 @@ export default function Timesheet() {
     employeeId,
     client: form.client,
     managerName: form.managerName,
-    rateType: form.rateType,
-    rateValue: form.rateValue,
     periodType: form.periodType,
     periodLabel,
-    periodStart,
-    periodEnd,
-    rows,
-    totalHrs,
-    totalWage,
+    rows: rows.map((r) => ({
+      date: r.date,
+      day: r.day,
+      hrs: r.hrs,
+      comments: r.comments || "",
+    })),
   });
 
   const downloadExcel = async () => {
@@ -729,11 +746,16 @@ export default function Timesheet() {
           comments: r.comments || "",
         })),
       });
-      toast.success("Timesheet emailed successfully (client format)");
+      toast.success("Timesheet emailed successfully (Excel attachment)");
       setMailOpen(false);
     } catch (error) {
       if (error.response?.status === 503 && error.response?.data?.useMailClient) {
-        toast.info('SMTP not configured — opening your mail client instead');
+        try {
+          await downloadExcel();
+          toast.info("Excel downloaded — opening your mail client. Attach the downloaded file before sending.");
+        } catch {
+          toast.error("Could not generate Excel file");
+        }
         openMailClientFallback();
         setMailOpen(false);
       } else {
@@ -850,10 +872,20 @@ export default function Timesheet() {
         <div style={{ padding: "28px 32px 32px" }}>
           <div style={{ display: "flex", gap: 24, marginBottom: 18 }}>
             <Field label="Employee Name">
-              <input style={{ ...inputStyle, background: "#f7f8fa" }} value={employeeName} readOnly />
+              <input
+                style={inputStyle}
+                value={employeeName}
+                onChange={(e) => setEmployeeName(e.target.value)}
+                placeholder="Employee name"
+              />
             </Field>
             <Field label="Employee ID">
-              <input style={{ ...inputStyle, background: "#f7f8fa" }} value={employeeId} readOnly />
+              <input
+                style={inputStyle}
+                value={employeeId}
+                onChange={(e) => setEmployeeId(e.target.value)}
+                placeholder="Employee ID"
+              />
             </Field>
             <Field label="Client">
               <input style={inputStyle} value={form.client} onChange={setField("client")} placeholder="Client name or contact" />

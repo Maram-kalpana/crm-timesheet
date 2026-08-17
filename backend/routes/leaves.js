@@ -78,10 +78,7 @@ router.get('/', authenticate, async (req, res, next) => {
     const params = [];
     const role = normalizeRole(req.user.role);
 
-    if (role === 'employee') {
-      where += ' AND lr.employee_id = ?';
-      params.push(req.user.employeeId);
-    } else if (role === 'hr') {
+    if (role === 'employee' || role === 'hr' || role === 'accountant') {
       where += ' AND lr.employee_id = ?';
       params.push(req.user.employeeId);
     } else if (role === 'team_lead') {

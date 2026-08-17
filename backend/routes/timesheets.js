@@ -10,7 +10,7 @@ const {
   buildClientTimesheetHtml,
   isEmailConfigured,
 } = require('../utils/emailService');
-const { generateTimesheetExcel } = require('../utils/excel');
+const { generateClientTimesheetExcel } = require('../utils/excel');
 
 const router = express.Router();
 
@@ -108,7 +108,7 @@ router.post('/export-excel', authenticate, async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Timesheet rows are required.' });
     }
 
-    const { buffer, filename } = await generateTimesheetExcel(payload);
+    const { buffer, filename } = await generateClientTimesheetExcel(payload);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(Buffer.from(buffer));
@@ -176,6 +176,7 @@ router.post('/send-mail', authenticate, async (req, res, next) => {
       cc: cc || undefined,
       subject: mailSubject,
       timesheetData: emailPayload,
+      includeBilling: false,
     });
 
     if (!result.success) {
@@ -200,7 +201,7 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Forbidden.' });
     }
 
-    const { timesheetIds, clientEmail, cc, subject } = req.body;
+    const { timesheetIds, clientEmail, cc, subject, rateOverrides } = req.body;
     if (!Array.isArray(timesheetIds) || !timesheetIds.length) {
       connection.release();
       return res.status(400).json({ success: false, message: 'Select at least one timesheet.' });
@@ -208,6 +209,21 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
     if (!clientEmail) {
       connection.release();
       return res.status(400).json({ success: false, message: 'Client email is required.' });
+    }
+
+    // Map of timesheetId -> overridden rate, sent by the accountant from
+    // the "Send to Client" modal. Falls back to the stored rate_value
+    // per timesheet when no override (or an invalid one) is provided.
+    const overrideMap = new Map();
+    if (Array.isArray(rateOverrides)) {
+      rateOverrides.forEach((o) => {
+        if (o && o.timesheetId != null) {
+          const rate = parseFloat(o.rateValue);
+          if (!Number.isNaN(rate) && rate >= 0) {
+            overrideMap.set(String(o.timesheetId), rate);
+          }
+        }
+      });
     }
 
     const placeholders = timesheetIds.map(() => '?').join(',');
@@ -233,7 +249,16 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
     const timesheetPayloads = [];
     for (const row of rows) {
       const entries = await getEntries(row.id);
-      timesheetPayloads.push(toTimesheetEmailPayload(row, entries));
+      const payload = toTimesheetEmailPayload(row, entries);
+
+      const override = overrideMap.get(String(row.id));
+      if (override !== undefined) {
+        const hrs = parseFloat(payload.totalHrs) || 0;
+        payload.rateValue = override;
+        payload.totalWage = hrs * override;
+      }
+
+      timesheetPayloads.push({ ...payload, _id: row.id });
     }
 
     const client = rows[0].client || '';
@@ -262,6 +287,7 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
           rateValue: timesheetPayloads[0].rateValue,
           totalWage: timesheetPayloads[0].totalWage,
         },
+        includeBilling: true,
       })
       : await sendCombinedClientBillingEmail({
         from,
@@ -287,16 +313,18 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
     }
 
     await connection.beginTransaction();
-    for (const row of rows) {
+    for (const ts of timesheetPayloads) {
       await connection.query(
         `UPDATE timesheets SET
           client_email = ?,
           sent_to_client_at = NOW(),
           sent_by_user_id = ?,
-          amount_due = total_wage,
+          rate_value = ?,
+          total_wage = ?,
+          amount_due = ?,
           status = 'reviewed'
          WHERE id = ?`,
-        [clientEmail, req.user.id, row.id]
+        [clientEmail, req.user.id, ts.rateValue, ts.totalWage, ts.totalWage, ts._id]
       );
     }
     await connection.commit();

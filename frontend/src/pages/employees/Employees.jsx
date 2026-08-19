@@ -11,7 +11,7 @@ import { useAuth } from '../../context/AuthContext';
 import { employeeAPI, departmentAPI, documentAPI } from '../../services/services';
 import EmployeeEditModal from '../../components/employees/EmployeeEditModal';
 import {
-  PageHeader, DataTable, SearchBar, Select, Button, Modal, Input, Avatar, StatusBadge, Loader, ConfirmDialog,
+  DataTable, SearchBar, Select, Button, Modal, Input, Avatar, StatusBadge, Loader, ConfirmDialog,
 } from '../../components/ui';
 import { getFullName, getErrorMessage, downloadBlob } from '../../utils/helpers';
 
@@ -24,10 +24,33 @@ const EMPLOYEE_TYPES = [
   { value: 'accountant', label: 'Accountant' },
 ];
 
+// Document categories required for every new hire
+const DOCUMENT_TYPES = [
+  { value: 'educational', label: 'Educational Document' },
+  { value: 'experience', label: 'Experience Document' },
+  { value: 'identity_proof', label: 'Identity Proof' },
+  { value: 'other', label: 'Other' },
+];
+
+// --- Validation patterns ---
+const NAME_PATTERN = { value: /^[A-Za-z\s.'-]+$/, message: 'Only letters are allowed' };
+const EMAIL_PATTERN = { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: 'Enter a valid email address' };
+const PHONE_PATTERN = { value: /^[6-9]\d{9}$/, message: 'Enter a valid 10-digit phone number' };
+const PINCODE_PATTERN = { value: /^\d{6}$/, message: 'Enter a valid 6-digit pincode' };
+const PAN_PATTERN = { value: /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, message: 'Enter a valid PAN (e.g. ABCDE1234F)' };
+const AADHAR_PATTERN = { value: /^\d{12}$/, message: 'Enter a valid 12-digit Aadhaar number' };
+const IFSC_PATTERN = { value: /^[A-Z]{4}0[A-Z0-9]{6}$/, message: 'Enter a valid IFSC code (e.g. HDFC0001234)' };
+const ACCOUNT_NUMBER_PATTERN = { value: /^\d{9,18}$/, message: 'Enter a valid account number (9-18 digits)' };
+
+const SelectError = ({ message }) => (
+  message ? <Typography variant="caption" color="error" sx={{ mt: 0.5, display: 'block' }}>{message}</Typography> : null
+);
+
 const Employees = () => {
   const { isAdminOnly, isHr, isTeamLead } = useAuth();
   const canManage = isAdminOnly || isHr || isTeamLead;
-  const canCreateAllTypes = isAdminOnly;
+  // Admin can create any employee type. HR can create everything except HR and Admin.
+  const canCreateAllTypes = isAdminOnly || isHr;
   const navigate = useNavigate();
 
   const [employees, setEmployees] = useState([]);
@@ -51,10 +74,32 @@ const Employees = () => {
   const [savingEdit, setSavingEdit] = useState(false);
   const [deactivateId, setDeactivateId] = useState(null);
   const [deactivating, setDeactivating] = useState(false);
+  const [docsError, setDocsError] = useState('');
 
   const { register, handleSubmit, reset, control, watch, formState: { errors } } = useForm();
   const [pendingFiles, setPendingFiles] = useState([]);
   const passwordValue = watch('password');
+
+  // Live salary figures for the Net Salary preview
+  const [
+    basicSalaryW, hraW, transportAllowanceW, medicalAllowanceW,
+    specialAllowanceW, bonusW, pfDeductionW, taxDeductionW, otherDeductionsW,
+  ] = watch([
+    'basicSalary', 'hra', 'transportAllowance', 'medicalAllowance',
+    'specialAllowance', 'bonus', 'pfDeduction', 'taxDeduction', 'otherDeductions',
+  ]);
+
+  const netSalary = (
+    (Number(basicSalaryW) || 0)
+    + (Number(hraW) || 0)
+    + (Number(transportAllowanceW) || 0)
+    + (Number(medicalAllowanceW) || 0)
+    + (Number(specialAllowanceW) || 0)
+    + (Number(bonusW) || 0)
+    - (Number(pfDeductionW) || 0)
+    - (Number(taxDeductionW) || 0)
+    - (Number(otherDeductionsW) || 0)
+  ).toFixed(2);
 
   useEffect(() => {
     if (!canManage) navigate('/dashboard');
@@ -115,12 +160,18 @@ const Employees = () => {
     setSelectedTeamIds([]);
     setPendingFiles([]);
     setCredentialsInfo(null);
+    setDocsError('');
     reset();
   };
 
   const onSubmitProfile = async (formData) => {
     if (!canCreateAllTypes && employeeType !== 'employee') {
-      toast.error('Only admin can create HR or Team Lead accounts');
+      toast.error('Only admin or HR can create HR, Accountant or Team Lead accounts');
+      return;
+    }
+
+    if (employeeType === 'team_lead' && !selectedTeamIds.length) {
+      toast.error('Please select at least one team member for this Team Lead');
       return;
     }
 
@@ -158,9 +209,11 @@ const Employees = () => {
         transportAllowance: formData.transportAllowance,
         medicalAllowance: formData.medicalAllowance,
         specialAllowance: formData.specialAllowance,
+        bonus: formData.bonus,
         pfDeduction: formData.pfDeduction,
         taxDeduction: formData.taxDeduction,
         otherDeductions: formData.otherDeductions,
+        netSalary,
         teamMemberIds: employeeType === 'team_lead' ? selectedTeamIds : [],
       };
 
@@ -184,9 +237,26 @@ const Employees = () => {
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files || []);
     setPendingFiles((prev) => [...prev, ...files.map((file) => ({ file, type: 'other' }))]);
+    setDocsError('');
+  };
+
+  const updateFileType = (index, type) => {
+    setPendingFiles((prev) => prev.map((item, i) => (i === index ? { ...item, type } : item)));
   };
 
   const finishAndClose = async () => {
+    if (!pendingFiles.length) {
+      setDocsError('Please upload at least one document before finishing.');
+      toast.error('Please upload at least one document');
+      return;
+    }
+    const missingType = pendingFiles.some((item) => !item.type);
+    if (missingType) {
+      setDocsError('Please select a document type for every uploaded file.');
+      toast.error('Please select a document type for every uploaded file');
+      return;
+    }
+
     setSubmitting(true);
     try {
       for (const item of pendingFiles) {
@@ -303,25 +373,20 @@ const Employees = () => {
       );
     }
     return (
-      <>
-        <Button variant="text" onClick={finishAndClose}>Skip & Finish</Button>
-        <Button onClick={finishAndClose} loading={submitting}>Finish</Button>
-      </>
+      <Button onClick={finishAndClose} loading={submitting}>Finish</Button>
     );
   };
 
-  const availableTypes = canCreateAllTypes
+  // Admin can pick any employee type. HR can pick everything except HR.
+  // Anyone else (shouldn't reach this modal, but just in case) is limited to plain "Employee".
+  const availableTypes = isAdminOnly
     ? EMPLOYEE_TYPES
-    : EMPLOYEE_TYPES.filter((t) => t.value === 'employee');
+    : isHr
+      ? EMPLOYEE_TYPES.filter((t) => t.value !== 'hr')
+      : EMPLOYEE_TYPES.filter((t) => t.value === 'employee');
 
   return (
     <Box>
-      <PageHeader
-        title="Employees"
-        subtitle={isTeamLead ? 'Your team members' : 'Manage your workforce'}
-        breadcrumb={[{ label: 'Employees', path: '/employees' }]}
-      />
-
       <Box display="flex" gap={2} mb={3} alignItems="center" flexWrap="nowrap">
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search employees..." fullWidth />
@@ -430,7 +495,12 @@ const Employees = () => {
               <Typography variant="subtitle2" color="primary" fontWeight={700}>Login Credentials</Typography>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Email" type="email" error={errors.email?.message} {...register('email', { required: 'Required' })} />
+              <Input
+                label="Email"
+                type="email"
+                error={errors.email?.message}
+                {...register('email', { required: 'Required', pattern: EMAIL_PATTERN })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <Input
@@ -459,52 +529,81 @@ const Employees = () => {
               <Typography variant="subtitle2" color="primary" fontWeight={700} mt={1}>Personal Information</Typography>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="First Name" error={errors.firstName?.message} {...register('firstName', { required: 'Required' })} />
+              <Input label="First Name" error={errors.firstName?.message} {...register('firstName', { required: 'Required', pattern: NAME_PATTERN })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Last Name" error={errors.lastName?.message} {...register('lastName', { required: 'Required' })} />
+              <Input label="Last Name" error={errors.lastName?.message} {...register('lastName', { required: 'Required', pattern: NAME_PATTERN })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Phone" error={errors.phone?.message} {...register('phone', { required: 'Required' })} />
+              <Input
+                label="Phone"
+                error={errors.phone?.message}
+                {...register('phone', { required: 'Required', pattern: PHONE_PATTERN })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Date of Birth" type="date" InputLabelProps={{ shrink: true }} {...register('dateOfBirth')} />
+              <Input
+                label="Date of Birth"
+                type="date"
+                InputLabelProps={{ shrink: true }}
+                error={errors.dateOfBirth?.message}
+                {...register('dateOfBirth', {
+                  required: 'Required',
+                  validate: (val) => {
+                    if (!val) return 'Required';
+                    const age = (new Date() - new Date(val)) / (1000 * 60 * 60 * 24 * 365.25);
+                    return age >= 18 || 'Employee must be at least 18 years old';
+                  },
+                })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <Controller
                 name="gender"
                 control={control}
-                render={({ field }) => (
-                  <Select
-                    label="Gender"
-                    value={field.value || ''}
-                    onChange={field.onChange}
-                    options={[
-                      { value: 'male', label: 'Male' },
-                      { value: 'female', label: 'Female' },
-                      { value: 'other', label: 'Other' },
-                    ]}
-                  />
+                rules={{ required: 'Required' }}
+                render={({ field, fieldState }) => (
+                  <>
+                    <Select
+                      label="Gender"
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={[
+                        { value: 'male', label: 'Male' },
+                        { value: 'female', label: 'Female' },
+                        { value: 'other', label: 'Other' },
+                      ]}
+                    />
+                    <SelectError message={fieldState.error?.message} />
+                  </>
                 )}
               />
             </Grid>
             <Grid size={12}>
-              <Input label="Address" {...register('address')} />
+              <Input label="Address" error={errors.address?.message} {...register('address', { required: 'Required' })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 4 }}>
-              <Input label="City" {...register('city')} />
+              <Input label="City" error={errors.city?.message} {...register('city', { required: 'Required', pattern: NAME_PATTERN })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 4 }}>
-              <Input label="State" {...register('state')} />
+              <Input label="State" error={errors.state?.message} {...register('state', { required: 'Required', pattern: NAME_PATTERN })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 4 }}>
-              <Input label="Pincode" {...register('pincode')} />
+              <Input
+                label="Pincode"
+                error={errors.pincode?.message}
+                {...register('pincode', { required: 'Required', pattern: PINCODE_PATTERN })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Emergency Contact Name" {...register('emergencyContactName')} />
+              <Input label="Emergency Contact Name" error={errors.emergencyContactName?.message} {...register('emergencyContactName', { required: 'Required', pattern: NAME_PATTERN })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Emergency Contact Phone" {...register('emergencyContactPhone')} />
+              <Input
+                label="Emergency Contact Phone"
+                error={errors.emergencyContactPhone?.message}
+                {...register('emergencyContactPhone', { required: 'Required', pattern: PHONE_PATTERN })}
+              />
             </Grid>
 
             <Grid size={12}>
@@ -515,36 +614,43 @@ const Employees = () => {
                 name="departmentId"
                 control={control}
                 rules={{ required: 'Required' }}
-                render={({ field }) => (
-                  <Select
-                    label="Department"
-                    value={field.value || ''}
-                    onChange={field.onChange}
-                    options={departments.map((d) => ({ value: d.id, label: d.name }))}
-                  />
+                render={({ field, fieldState }) => (
+                  <>
+                    <Select
+                      label="Department"
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      options={departments.map((d) => ({ value: d.id, label: d.name }))}
+                    />
+                    <SelectError message={fieldState.error?.message} />
+                  </>
                 )}
               />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Designation" error={errors.designation?.message} {...register('designation', { required: 'Required' })} />
+              <Input label="Designation" error={errors.designation?.message} {...register('designation', { required: 'Required', pattern: NAME_PATTERN })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <Controller
                 name="employmentType"
                 control={control}
                 defaultValue="full-time"
-                render={({ field }) => (
-                  <Select
-                    label="Employment Type"
-                    value={field.value}
-                    onChange={field.onChange}
-                    options={[
-                      { value: 'full-time', label: 'Full Time' },
-                      { value: 'part-time', label: 'Part Time' },
-                      { value: 'contract', label: 'Contract' },
-                      { value: 'intern', label: 'Intern' },
-                    ]}
-                  />
+                rules={{ required: 'Required' }}
+                render={({ field, fieldState }) => (
+                  <>
+                    <Select
+                      label="Employment Type"
+                      value={field.value}
+                      onChange={field.onChange}
+                      options={[
+                        { value: 'full-time', label: 'Full Time' },
+                        { value: 'part-time', label: 'Part Time' },
+                        { value: 'contract', label: 'Contract' },
+                        { value: 'intern', label: 'Intern' },
+                      ]}
+                    />
+                    <SelectError message={fieldState.error?.message} />
+                  </>
                 )}
               />
             </Grid>
@@ -576,58 +682,141 @@ const Employees = () => {
               <Typography variant="subtitle2" color="primary" fontWeight={700} mt={1}>Bank & Government Details</Typography>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Bank Name" {...register('bankName')} />
+              <Input label="Bank Name" error={errors.bankName?.message} {...register('bankName', { required: 'Required', pattern: NAME_PATTERN })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Account Number" {...register('bankAccountNumber')} />
+              <Input
+                label="Account Number"
+                error={errors.bankAccountNumber?.message}
+                {...register('bankAccountNumber', { required: 'Required', pattern: ACCOUNT_NUMBER_PATTERN })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="IFSC Code" {...register('bankIfsc')} />
+              <Input
+                label="IFSC Code"
+                error={errors.bankIfsc?.message}
+                {...register('bankIfsc', {
+                  required: 'Required',
+                  pattern: IFSC_PATTERN,
+                  setValueAs: (v) => (v || '').toUpperCase(),
+                })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Branch" {...register('bankBranch')} />
+              <Input label="Branch" error={errors.bankBranch?.message} {...register('bankBranch', { required: 'Required' })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Account Holder Name" {...register('bankAccountHolder')} />
+              <Input label="Account Holder Name" error={errors.bankAccountHolder?.message} {...register('bankAccountHolder', { required: 'Required', pattern: NAME_PATTERN })} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="PAN" {...register('panNumber')} />
+              <Input
+                label="PAN"
+                error={errors.panNumber?.message}
+                {...register('panNumber', {
+                  required: 'Required',
+                  pattern: PAN_PATTERN,
+                  setValueAs: (v) => (v || '').toUpperCase(),
+                })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Aadhaar" {...register('aadharNumber')} />
+              <Input
+                label="Aadhaar"
+                error={errors.aadharNumber?.message}
+                {...register('aadharNumber', { required: 'Required', pattern: AADHAR_PATTERN })}
+              />
             </Grid>
 
             <Grid size={12}>
               <Typography variant="subtitle2" color="primary" fontWeight={700} mt={1}>Salary Structure</Typography>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Basic Salary" type="number" {...register('basicSalary')} />
+              <Input
+                label="Basic Salary"
+                type="number"
+                error={errors.basicSalary?.message}
+                {...register('basicSalary', { required: 'Required', min: { value: 1, message: 'Must be greater than 0' } })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="HRA" type="number" {...register('hra')} />
+              <Input
+                label="HRA"
+                type="number"
+                error={errors.hra?.message}
+                {...register('hra', { required: 'Required', min: { value: 0, message: 'Cannot be negative' } })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Transport Allowance" type="number" {...register('transportAllowance')} />
+              <Input
+                label="Transport Allowance"
+                type="number"
+                error={errors.transportAllowance?.message}
+                {...register('transportAllowance', { required: 'Required', min: { value: 0, message: 'Cannot be negative' } })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Medical Allowance" type="number" {...register('medicalAllowance')} />
+              <Input
+                label="Medical Allowance"
+                type="number"
+                error={errors.medicalAllowance?.message}
+                {...register('medicalAllowance', { required: 'Required', min: { value: 0, message: 'Cannot be negative' } })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Special Allowance" type="number" {...register('specialAllowance')} />
+              <Input
+                label="Special Allowance"
+                type="number"
+                error={errors.specialAllowance?.message}
+                {...register('specialAllowance', { required: 'Required', min: { value: 0, message: 'Cannot be negative' } })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="PF Deduction" type="number" {...register('pfDeduction')} />
+              <Input
+                label="Bonus"
+                type="number"
+                error={errors.bonus?.message}
+                {...register('bonus', { required: 'Required', min: { value: 0, message: 'Cannot be negative' } })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Tax Deduction" type="number" {...register('taxDeduction')} />
+              <Input
+                label="PF Deduction"
+                type="number"
+                error={errors.pfDeduction?.message}
+                {...register('pfDeduction', { required: 'Required', min: { value: 0, message: 'Cannot be negative' } })}
+              />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Input label="Other Deductions" type="number" {...register('otherDeductions')} />
+              <Input
+                label="Tax Deduction"
+                type="number"
+                error={errors.taxDeduction?.message}
+                {...register('taxDeduction', { required: 'Required', min: { value: 0, message: 'Cannot be negative' } })}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <Input
+                label="Other Deductions"
+                type="number"
+                error={errors.otherDeductions?.message}
+                {...register('otherDeductions', { required: 'Required', min: { value: 0, message: 'Cannot be negative' } })}
+              />
+            </Grid>
+            <Grid size={12}>
+              <Box p={2} bgcolor="#F0FDF4" borderRadius={2} display="flex" justifyContent="space-between" alignItems="center">
+                <Typography variant="subtitle2" fontWeight={700}>Net Salary (auto-calculated)</Typography>
+                <Typography variant="subtitle1" fontWeight={700} color="success.main">
+                  ₹{netSalary}
+                </Typography>
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                Net Salary = Basic + HRA + Transport + Medical + Special Allowance + Bonus − PF − Tax − Other Deductions
+              </Typography>
             </Grid>
 
             {employeeType === 'team_lead' && (
               <Grid size={12}>
-                <Typography variant="subtitle2" mb={1} mt={1}>Team Members</Typography>
+                <Typography variant="subtitle2" mb={1} mt={1}>Team Members *</Typography>
                 <FormGroup sx={{ maxHeight: 200, overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 2, p: 1 }}>
                   {assignable.map((emp) => (
                     <FormControlLabel
@@ -645,12 +834,16 @@ const Employees = () => {
                     <Typography variant="caption" color="text.secondary" p={1}>No unassigned employees available</Typography>
                   )}
                 </FormGroup>
+                {!selectedTeamIds.length && (
+                  <Typography variant="caption" color="error">At least one team member is required</Typography>
+                )}
               </Grid>
             )}
 
             <Grid size={12}>
               <Typography variant="caption" color="text.secondary">
                 Employee ID is generated automatically. Login email and password will be used for the employee account.
+                Fields marked as required must be filled in the correct format before the employee can be created.
               </Typography>
             </Grid>
           </Grid>
@@ -670,24 +863,57 @@ const Employees = () => {
                 )}
               </Box>
             )}
+
+            <Typography variant="body2" color="text.secondary" mb={1}>
+              Upload educational documents, experience documents, and identity proof for this employee. At least one document is required.
+            </Typography>
+
             <input type="file" id="emp-doc-upload" hidden multiple onChange={handleFileSelect} />
             <label htmlFor="emp-doc-upload">
               <Button component="span" variant="outlined" startIcon={<Upload size={18} />}>
                 Upload Documents
               </Button>
             </label>
+
+            {docsError && (
+              <Typography variant="caption" color="error" display="block" mt={1}>{docsError}</Typography>
+            )}
+
             <Box mt={2} display="flex" flexDirection="column" gap={1}>
               {pendingFiles.map((item, index) => (
-                <Box key={index} display="flex" alignItems="center" justifyContent="space-between" p={1.5} border="1px solid #E5E7EB" borderRadius={2}>
-                  <Box display="flex" alignItems="center" gap={1}>
+                <Box
+                  key={index}
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  gap={2}
+                  p={1.5}
+                  border="1px solid #E5E7EB"
+                  borderRadius={2}
+                >
+                  <Box display="flex" alignItems="center" gap={1} sx={{ flex: 1, minWidth: 0 }}>
                     <FileText size={18} />
-                    <Typography variant="body2">{item.file.name}</Typography>
+                    <Typography variant="body2" noWrap>{item.file.name}</Typography>
+                  </Box>
+                  <Box sx={{ width: 200, flexShrink: 0 }}>
+                    <Select
+                      label="Document Type"
+                      value={item.type}
+                      onChange={(e) => updateFileType(index, e.target.value)}
+                      options={DOCUMENT_TYPES}
+                      fullWidth
+                    />
                   </Box>
                   <Button size="small" variant="text" color="error" onClick={() => setPendingFiles((p) => p.filter((_, i) => i !== index))}>
                     <Trash2 size={16} />
                   </Button>
                 </Box>
               ))}
+              {!pendingFiles.length && (
+                <Typography variant="caption" color="text.secondary">
+                  No documents uploaded yet. Add educational, experience, and identity proof documents above.
+                </Typography>
+              )}
             </Box>
           </Box>
         )}

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Grid, Box, Typography, List, ListItem, ListItemText } from '@mui/material';
+import { Grid, Box, List, ListItem, ListItemText } from '@mui/material';
 import { Users, UserCheck, UserX, Clock, CalendarClock } from 'lucide-react';
 import { dashboardAPI } from '../../services/services';
-import { StatCard, PageHeader, Card, Loader, Avatar } from '../../components/ui';
+import { StatCard, Card, Loader, Avatar } from '../../components/ui';
 import { colors } from '../../theme';
 import { getFullName } from '../../utils/helpers';
 
@@ -23,12 +23,6 @@ const TeamLeadDashboard = () => {
 
   return (
     <Box>
-      <PageHeader
-        title="Team Dashboard"
-        subtitle="Your team overview for today"
-        breadcrumb={[{ label: 'Dashboard', path: '/dashboard' }]}
-      />
-
       <Grid container spacing={2} mb={3}>
         {[
           { title: 'Team Members', value: stats.teamSize, icon: Users, color: colors.primary },

@@ -34,11 +34,13 @@ const maskSensitiveEmployee = (row, user) => {
   return masked;
 };
 
+// CHANGED: HR can now create accountant / team_lead / employee accounts.
+// HR still cannot create "hr" or "admin" accounts — only admin can do that.
 const canManageRole = (creatorRole, targetRole) => {
   const creator = normalizeRole(creatorRole);
   const target = normalizeRole(targetRole);
   if (creator === 'admin') return target !== 'admin';
-  if (creator === 'hr') return target === 'employee';
+  if (creator === 'hr') return target !== 'admin' && target !== 'hr';
   return false;
 };
 

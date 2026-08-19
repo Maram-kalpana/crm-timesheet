@@ -4,7 +4,7 @@ import { Users, UserCheck, UserX, Clock, CalendarClock, FolderKanban, Megaphone,
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { dashboardAPI } from '../../services/services';
-import { StatCard, PageHeader, Card, Loader, Avatar } from '../../components/ui';
+import { StatCard, Card, Loader, Avatar } from '../../components/ui';
 import { colors } from '../../theme';
 import { formatDate, getFullName } from '../../utils/helpers';
 
@@ -33,12 +33,6 @@ const AdminDashboard = () => {
 
   return (
     <Box>
-      <PageHeader
-        title="Dashboard"
-        subtitle="Welcome back! Here's what's happening today."
-        breadcrumb={[{ label: 'Dashboard', path: '/dashboard' }]}
-      />
-
       <Grid container spacing={2} mb={3}>
         {[
           { title: 'Total Employees', value: stats.totalEmployees, icon: Users, color: colors.primary },

@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import {
-  Box, Typography, TextField, Grid,
+  Box, TextField, Grid, Typography, Divider,
 } from '@mui/material';
-import { LogOut } from 'lucide-react';
+import { LogOut, Eye } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useAuth } from '../../context/AuthContext';
 import { resignationAPI } from '../../services/services';
 import {
-  PageHeader, Card, Button, DataTable, StatusBadge, Loader, EmptyState, Modal, Input, ConfirmDialog,
+  Card, Button, DataTable, StatusBadge, Loader, EmptyState, Modal, Input, ConfirmDialog, Avatar,
 } from '../../components/ui';
-import { formatDate, getErrorMessage } from '../../utils/helpers';
+import { formatDate, getFullName, getErrorMessage } from '../../utils/helpers';
+import { colors } from '../../theme';
+
+const todayStr = () => new Date().toISOString().split('T')[0];
 
 const Resignations = () => {
   const { isAdminOnly, isHr, user } = useAuth();
@@ -19,8 +22,10 @@ const Resignations = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({ reason: '', lastWorkingDate: '' });
+  const [formErrors, setFormErrors] = useState({});
   const [actionId, setActionId] = useState(null);
   const [actionType, setActionType] = useState(null);
+  const [reviewRow, setReviewRow] = useState(null);
 
   const fetchResignations = async () => {
     setLoading(true);
@@ -36,17 +41,29 @@ const Resignations = () => {
 
   useEffect(() => { fetchResignations(); }, [canManage]);
 
+  const validateForm = () => {
+    const errors = {};
+    if (!form.reason.trim()) errors.reason = 'Please share a reason for resigning';
+    else if (form.reason.trim().length < 10) errors.reason = 'Please provide a bit more detail (min 10 characters)';
+    if (!form.lastWorkingDate) errors.lastWorkingDate = 'Last working date is required';
+    else if (form.lastWorkingDate < todayStr()) errors.lastWorkingDate = 'Last working date cannot be in the past';
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const closeSubmitModal = () => {
+    setModalOpen(false);
+    setForm({ reason: '', lastWorkingDate: '' });
+    setFormErrors({});
+  };
+
   const handleSubmit = async () => {
-    if (!form.reason || !form.lastWorkingDate) {
-      toast.error('Please fill all fields');
-      return;
-    }
+    if (!validateForm()) return;
     setSubmitting(true);
     try {
       await resignationAPI.submit(form);
       toast.success('Resignation submitted');
-      setModalOpen(false);
-      setForm({ reason: '', lastWorkingDate: '' });
+      closeSubmitModal();
       fetchResignations();
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -63,6 +80,7 @@ const Resignations = () => {
       else if (actionType === 'complete') await resignationAPI.complete(actionId);
       toast.success(`Resignation ${actionType}d`);
       fetchResignations();
+      setReviewRow(null);
     } catch (error) {
       toast.error(getErrorMessage(error));
     }
@@ -70,10 +88,44 @@ const Resignations = () => {
     setActionType(null);
   };
 
+  const startAction = (row, type) => {
+    setActionId(row.id);
+    setActionType(type);
+  };
+
   const columns = canManage ? [
-    { field: 'employee', headerName: 'Employee', renderCell: ({ row }) => `${row.first_name} ${row.last_name}` },
-    { field: 'employee_id', headerName: 'Emp ID' },
+    {
+      field: 'employee',
+      headerName: 'Employee',
+      renderCell: ({ row }) => (
+        <Box display="flex" alignItems="center" gap={1.5}>
+          <Avatar name={getFullName(row.first_name, row.last_name)} size={36} />
+          <Box>
+            <Box fontWeight={500}>{getFullName(row.first_name, row.last_name)}</Box>
+            <Box fontSize="0.75rem" color="text.secondary">{row.employee_id}</Box>
+          </Box>
+        </Box>
+      ),
+    },
     { field: 'department_name', headerName: 'Department' },
+    {
+      field: 'reason',
+      headerName: 'Reason',
+      renderCell: ({ value }) => (
+        <Typography
+          variant="body2"
+          sx={{
+            maxWidth: 220,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={value}
+        >
+          {value}
+        </Typography>
+      ),
+    },
     { field: 'last_working_date', headerName: 'Last Working Day', renderCell: ({ value }) => formatDate(value) },
     { field: 'status', headerName: 'Status', renderCell: ({ value }) => <StatusBadge status={value} /> },
     {
@@ -81,15 +133,9 @@ const Resignations = () => {
       headerName: 'Actions',
       renderCell: ({ row }) => (
         <Box display="flex" gap={1}>
-          {isAdminOnly && row.status === 'pending' && (
-            <>
-              <Button size="small" onClick={() => { setActionId(row.id); setActionType('approve'); }}>Approve</Button>
-              <Button size="small" variant="outlined" color="error" onClick={() => { setActionId(row.id); setActionType('reject'); }}>Reject</Button>
-            </>
-          )}
-          {isAdminOnly && row.status === 'approved' && (
-            <Button size="small" onClick={() => { setActionId(row.id); setActionType('complete'); }}>Complete Exit</Button>
-          )}
+          <Button size="small" variant="outlined" startIcon={<Eye size={14} />} onClick={() => setReviewRow(row)}>
+            Review
+          </Button>
         </Box>
       ),
     },
@@ -106,14 +152,19 @@ const Resignations = () => {
 
   return (
     <Box>
-      <PageHeader
-        title="Resignations"
-        subtitle={canManage ? 'Manage employee resignation requests' : 'Submit and track your resignation'}
-        breadcrumb={[{ label: 'Resignations', path: '/resignations' }]}
-        action={!canManage && !hasActive ? (
+      {!canManage && !hasActive && (
+        <Box display="flex" justifyContent="flex-end" mb={2}>
           <Button startIcon={<LogOut size={18} />} onClick={() => setModalOpen(true)}>Submit Resignation</Button>
-        ) : null}
-      />
+        </Box>
+      )}
+
+      {!canManage && hasActive && (
+        <Box mb={2} p={2} bgcolor="#FFF7ED" borderRadius={2} border="1px solid #FED7AA">
+          <Typography variant="body2" color="#9A3412">
+            You have an active resignation request. You can submit a new one once it's resolved.
+          </Typography>
+        </Box>
+      )}
 
       {!resignations.length ? (
         <EmptyState
@@ -125,21 +176,26 @@ const Resignations = () => {
           ) : null}
         />
       ) : (
-        <Card>
+        <Card padding={0}>
           <DataTable columns={columns} rows={resignations} />
         </Card>
       )}
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Submit Resignation">
-        <Grid container spacing={2}>
+      {/* Submit resignation */}
+      <Modal open={modalOpen} onClose={closeSubmitModal} title="Submit Resignation" subtitle="This will be sent to HR and Admin for review">
+        <Grid container spacing={2.5}>
           <Grid size={{ xs: 12 }}>
             <TextField
-              label="Reason"
+              label="Reason for resigning"
+              placeholder="Let us know why you're leaving and anything you'd like the team to know"
               multiline
-              rows={3}
+              rows={4}
               fullWidth
               value={form.reason}
               onChange={(e) => setForm({ ...form, reason: e.target.value })}
+              error={!!formErrors.reason}
+              helperText={formErrors.reason || `${form.reason.length}/500`}
+              inputProps={{ maxLength: 500 }}
             />
           </Grid>
           <Grid size={{ xs: 12 }}>
@@ -149,12 +205,75 @@ const Resignations = () => {
               value={form.lastWorkingDate}
               onChange={(e) => setForm({ ...form, lastWorkingDate: e.target.value })}
               InputLabelProps={{ shrink: true }}
+              inputProps={{ min: todayStr() }}
+              error={formErrors.lastWorkingDate}
             />
           </Grid>
           <Grid size={{ xs: 12 }}>
-            <Button fullWidth loading={submitting} onClick={handleSubmit}>Submit</Button>
+            <Divider sx={{ mb: 2 }} />
+            <Box display="flex" gap={1.5}>
+              <Button variant="outlined" fullWidth onClick={closeSubmitModal}>Cancel</Button>
+              <Button fullWidth loading={submitting} onClick={handleSubmit}>Submit Resignation</Button>
+            </Box>
           </Grid>
         </Grid>
+      </Modal>
+
+      {/* Manager review modal */}
+      <Modal
+        open={!!reviewRow}
+        onClose={() => setReviewRow(null)}
+        title="Review Resignation"
+        subtitle={reviewRow ? getFullName(reviewRow.first_name, reviewRow.last_name) : ''}
+      >
+        {reviewRow && (
+          <Box>
+            <Box display="flex" alignItems="center" gap={2} mb={2.5}>
+              <Avatar name={getFullName(reviewRow.first_name, reviewRow.last_name)} size={56} />
+              <Box>
+                <Typography fontWeight={700}>{getFullName(reviewRow.first_name, reviewRow.last_name)}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {reviewRow.employee_id} · {reviewRow.designation || '—'}
+                </Typography>
+              </Box>
+              <Box ml="auto">
+                <StatusBadge status={reviewRow.status} />
+              </Box>
+            </Box>
+
+            <Box display="flex" justifyContent="space-between" py={1.2} borderBottom={`1px solid ${colors.border}`}>
+              <Typography variant="body2" color="text.secondary">Department</Typography>
+              <Typography variant="body2" fontWeight={500}>{reviewRow.department_name || '—'}</Typography>
+            </Box>
+            <Box display="flex" justifyContent="space-between" py={1.2} borderBottom={`1px solid ${colors.border}`}>
+              <Typography variant="body2" color="text.secondary">Submitted</Typography>
+              <Typography variant="body2" fontWeight={500}>{formatDate(reviewRow.created_at)}</Typography>
+            </Box>
+            <Box display="flex" justifyContent="space-between" py={1.2} borderBottom={`1px solid ${colors.border}`}>
+              <Typography variant="body2" color="text.secondary">Last Working Day</Typography>
+              <Typography variant="body2" fontWeight={500}>{formatDate(reviewRow.last_working_date)}</Typography>
+            </Box>
+
+            <Typography variant="subtitle2" color="text.secondary" fontWeight={700} mt={2.5} mb={1}>
+              REASON
+            </Typography>
+            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+              {reviewRow.reason || '—'}
+            </Typography>
+
+            {isAdminOnly && reviewRow.status === 'pending' && (
+              <Box display="flex" gap={1.5} mt={3}>
+                <Button fullWidth onClick={() => startAction(reviewRow, 'approve')}>Approve</Button>
+                <Button fullWidth variant="outlined" color="error" onClick={() => startAction(reviewRow, 'reject')}>Reject</Button>
+              </Box>
+            )}
+            {isAdminOnly && reviewRow.status === 'approved' && (
+              <Box mt={3}>
+                <Button fullWidth onClick={() => startAction(reviewRow, 'complete')}>Complete Exit</Button>
+              </Box>
+            )}
+          </Box>
+        )}
       </Modal>
 
       <ConfirmDialog

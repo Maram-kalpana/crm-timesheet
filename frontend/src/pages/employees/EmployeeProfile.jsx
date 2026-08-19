@@ -10,7 +10,7 @@ import { employeeAPI, documentAPI, authAPI, departmentAPI } from '../../services
 import { useAuth } from '../../context/AuthContext';
 import EmployeeEditModal from '../../components/employees/EmployeeEditModal';
 import {
-  PageHeader, Card, Avatar, StatusBadge, Loader, DataTable, EmptyState, Input, Button, ConfirmDialog,
+  Card, Avatar, StatusBadge, Loader, DataTable, EmptyState, Input, Button, ConfirmDialog,
 } from '../../components/ui';
 import { colors } from '../../theme';
 import { formatDate, formatCurrency, getFullName, getErrorMessage, downloadBlob } from '../../utils/helpers';
@@ -196,105 +196,104 @@ const EmployeeProfile = ({ isProfileRoute = false }) => {
     </Box>
   );
 
-  const canSeeEmployeesList = isAdminOnly || isHr || isTeamLead;
-  const breadcrumb = isProfileRoute || isOwnProfile
-    ? [{ label: 'Profile', path: '/profile' }]
-    : [
-      ...(canSeeEmployeesList ? [{ label: 'Employees', path: '/employees' }] : []),
-      { label: getFullName(employee.first_name, employee.last_name) },
-    ];
+  // Full management tabs (Professional, Bank, Salary, Attendance, Projects, Leaves, Documents)
+  // apply everywhere EXCEPT when Admin is viewing their own profile — that case only shows
+  // Personal Details (sidebar) + Change Password. HR/Team Lead/Employee/Accountant get full
+  // tabs even on their own profile.
+  const showFullTabs = !(isOwnProfile && isAdminOnly);
+  const showPasswordTab = isProfileRoute || isOwnProfile;
 
-  const tabs = ['Personal', 'Professional', 'Bank', 'Salary', 'Attendance', 'Projects', 'Leaves', 'Documents'];
+  const tabs = showFullTabs
+    ? ['Professional', 'Bank', 'Salary', 'Attendance', 'Projects', 'Leaves', 'Documents']
+    : [];
+  if (showPasswordTab) tabs.push('Change Password');
+
+  const professionalIndex = tabs.indexOf('Professional');
+  const bankIndex = tabs.indexOf('Bank');
+  const salaryIndex = tabs.indexOf('Salary');
+  const attendanceIndex = tabs.indexOf('Attendance');
+  const projectsIndex = tabs.indexOf('Projects');
+  const leavesIndex = tabs.indexOf('Leaves');
+  const documentsIndex = tabs.indexOf('Documents');
+  const passwordTabIndex = tabs.indexOf('Change Password');
 
   return (
     <Box>
-      <PageHeader
-        title={isProfileRoute || isOwnProfile ? 'My Profile' : getFullName(employee.first_name, employee.last_name)}
-        subtitle={`${employee.designation || 'Employee'} · ${employee.department_name || 'N/A'}`}
-        breadcrumb={breadcrumb}
-        action={
-          <Box display="flex" gap={1}>
-            {canEdit && (
-              <Button variant="outlined" startIcon={<Pencil size={16} />} onClick={() => setEditOpen(true)}>
-                Edit
-              </Button>
-            )}
-            {canDelete && (
-              <Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} onClick={() => setDeleteOpen(true)}>
-                Deactivate
-              </Button>
-            )}
-          </Box>
-        }
-      />
+      <Grid container spacing={3}>
+        {/* Vertical profile card: avatar block (left) + identity/status/edit (right), then personal details */}
+        <Grid size={{ xs: 12, md: 4 }}>
+          <Card>
+            <Box display="flex" gap={2.5} alignItems="flex-start">
+              {/* Left: avatar with name underneath */}
+              <Box display="flex" flexDirection="column" alignItems="center" flexShrink={0}>
+                <Box position="relative">
+                  <Avatar name={getFullName(employee.first_name, employee.last_name)} src={employee.avatar} size={80} />
+                  {canEdit && (
+                    <>
+                      <input ref={avatarInputRef} type="file" hidden accept="image/*" onChange={handleAvatarUpload} />
+                      <IconButton
+                        size="small"
+                        onClick={() => avatarInputRef.current?.click()}
+                        disabled={uploadingAvatar}
+                        sx={{
+                          position: 'absolute', bottom: 0, right: 0,
+                          bgcolor: colors.primary, color: '#fff',
+                          '&:hover': { bgcolor: colors.primary },
+                        }}
+                      >
+                        <Camera size={14} />
+                      </IconButton>
+                    </>
+                  )}
+                </Box>
+                <Typography variant="subtitle1" fontWeight={700} mt={1.5} textAlign="center">
+                  {getFullName(employee.first_name, employee.last_name)}
+                </Typography>
+              </Box>
 
-      <Card sx={{ mb: 3 }}>
-        <Box display="flex" alignItems="center" gap={3} flexWrap="wrap">
-          <Box position="relative">
-            <Avatar name={getFullName(employee.first_name, employee.last_name)} src={employee.avatar} size={80} />
-            {canEdit && (
-              <>
-                <input ref={avatarInputRef} type="file" hidden accept="image/*" onChange={handleAvatarUpload} />
-                <IconButton
-                  size="small"
-                  onClick={() => avatarInputRef.current?.click()}
-                  disabled={uploadingAvatar}
-                  sx={{
-                    position: 'absolute', bottom: 0, right: 0,
-                    bgcolor: colors.primary, color: '#fff',
-                    '&:hover': { bgcolor: colors.primary },
-                  }}
-                >
-                  <Camera size={14} />
-                </IconButton>
-              </>
-            )}
-          </Box>
-          <Box flex={1}>
-            <Typography variant="h5" fontWeight={700}>{getFullName(employee.first_name, employee.last_name)}</Typography>
-            <Typography color="text.secondary">{employee.email}</Typography>
-            <Box display="flex" gap={1} mt={1} flexWrap="wrap">
-              <StatusBadge status={employee.is_active ? 'active' : 'inactive'} />
-              <StatusBadge status={employee.role} label={employee.role?.replace('_', ' ').toUpperCase()} />
+              {/* Right: employee ID, email, status badges, edit/deactivate */}
+              <Box display="flex" flexDirection="column" gap={0.75} minWidth={0}>
+                <Typography variant="body2" color="text.secondary">
+                  Employee ID: {employee.employee_id}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" noWrap>{employee.email}</Typography>
+
+                <Box display="flex" gap={1} mt={0.5} flexWrap="wrap">
+                  <StatusBadge status={employee.is_active ? 'active' : 'inactive'} />
+                  <StatusBadge status={employee.role} label={employee.role?.replace('_', ' ').toUpperCase()} />
+                </Box>
+
+                {(canEdit || canDelete) && (
+                  <Box display="flex" gap={1} mt={1}>
+                    {canEdit && (
+                      <IconButton
+                        onClick={() => setEditOpen(true)}
+                        sx={{ border: `1px solid ${colors.border}`, borderRadius: 2 }}
+                        title="Edit"
+                      >
+                        <Pencil size={18} />
+                      </IconButton>
+                    )}
+                    {canDelete && (
+                      <IconButton
+                        onClick={() => setDeleteOpen(true)}
+                        color="error"
+                        sx={{ border: `1px solid ${colors.border}`, borderRadius: 2 }}
+                        title="Deactivate"
+                      >
+                        <Trash2 size={18} />
+                      </IconButton>
+                    )}
+                  </Box>
+                )}
+              </Box>
             </Box>
-          </Box>
-          <Box textAlign="right">
-            <Typography variant="caption" color="text.secondary">Employee ID</Typography>
-            <Typography fontWeight={600}>{employee.employee_id}</Typography>
-          </Box>
-        </Box>
-      </Card>
 
-      {(isProfileRoute || isOwnProfile) && (
-        <Card title="Change Password" sx={{ mb: 3 }}>
-          <Box component="form" onSubmit={handleSubmit(onChangePassword)}>
-            <Grid container spacing={2}>
-              <Grid size={{ xs: 12, md: 4 }}>
-                <Input label="Current Password" type="password" error={errors.currentPassword?.message} {...register('currentPassword', { required: 'Required' })} />
-              </Grid>
-              <Grid size={{ xs: 12, md: 4 }}>
-                <Input label="New Password" type="password" error={errors.newPassword?.message} {...register('newPassword', { required: 'Required', minLength: { value: 6, message: 'Min 6 characters' } })} />
-              </Grid>
-              <Grid size={{ xs: 12, md: 4 }}>
-                <Input label="Confirm New Password" type="password" error={errors.confirmPassword?.message} {...register('confirmPassword', { required: 'Required' })} />
-              </Grid>
-              <Grid size={{ xs: 12 }}>
-                <Button type="submit" loading={changingPassword}>Update Password</Button>
-              </Grid>
-            </Grid>
-          </Box>
-        </Card>
-      )}
+            <Divider sx={{ my: 2.5 }} />
 
-      <Card padding={0}>
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: `1px solid ${colors.border}` }}>
-          {tabs.map((label) => (
-            <Tab key={label} label={label} />
-          ))}
-        </Tabs>
-
-        <Box px={3} pb={3}>
-          <TabPanel value={tab} index={0}>
+            <Typography variant="subtitle2" color="text.secondary" fontWeight={700} mb={0.5}>
+              PERSONAL DETAILS
+            </Typography>
             <InfoRow label="Phone" value={employee.phone} />
             <InfoRow label="Date of Birth" value={formatDate(employee.date_of_birth)} />
             <InfoRow label="Gender" value={employee.gender} />
@@ -303,102 +302,158 @@ const EmployeeProfile = ({ isProfileRoute = false }) => {
             <InfoRow label="State" value={employee.state} />
             <InfoRow label="Country" value={employee.country} />
             <InfoRow label="Pincode" value={employee.pincode} />
-            <InfoRow label="Emergency Contact" value={employee.emergency_contact_name ? `${employee.emergency_contact_name} (${employee.emergency_contact_phone})` : null} />
-          </TabPanel>
-
-          <TabPanel value={tab} index={1}>
-            <InfoRow label="Department" value={employee.department_name} />
-            <InfoRow label="Designation" value={employee.designation} />
-            <InfoRow label="Employment Type" value={employee.employment_type} />
-            <InfoRow label="Joining Date" value={formatDate(employee.joining_date)} />
-            <InfoRow label="Reporting Manager" value={employee.manager_name} />
-            <InfoRow label="Employment Status" value={employee.employment_status} />
-          </TabPanel>
-
-          <TabPanel value={tab} index={2}>
-            <InfoRow label="Bank Name" value={employee.bank_name} />
-            <InfoRow label="Account Holder" value={employee.bank_account_holder} />
-            <InfoRow label="Account Number" value={employee.bank_account_number} />
-            <InfoRow label="IFSC Code" value={employee.bank_ifsc} />
-            <InfoRow label="Branch" value={employee.bank_branch} />
-            <InfoRow label="PAN" value={employee.pan_number} />
-            <InfoRow label="Aadhar" value={employee.aadhar_number} />
-          </TabPanel>
-
-          <TabPanel value={tab} index={3}>
-            {employee.salary ? (
-              <>
-                <InfoRow label="Basic Salary" value={formatCurrency(employee.salary.basic_salary)} />
-                <InfoRow label="HRA" value={formatCurrency(employee.salary.hra)} />
-                <InfoRow label="Transport" value={formatCurrency(employee.salary.transport_allowance)} />
-                <InfoRow label="Medical" value={formatCurrency(employee.salary.medical_allowance)} />
-                <InfoRow label="Special Allowance" value={formatCurrency(employee.salary.special_allowance)} />
-                <Divider sx={{ my: 2 }} />
-                <InfoRow label="PF Deduction" value={formatCurrency(employee.salary.pf_deduction)} />
-                <InfoRow label="Tax Deduction" value={formatCurrency(employee.salary.tax_deduction)} />
-                <InfoRow label="Other Deductions" value={formatCurrency(employee.salary.other_deductions)} />
-              </>
-            ) : <EmptyState title="No salary data" description="Salary structure not configured." />}
-          </TabPanel>
-
-          <TabPanel value={tab} index={4}>
-            <DataTable
-              columns={[
-                { field: 'date', headerName: 'Date', renderCell: ({ value }) => formatDate(value) },
-                { field: 'status', headerName: 'Status', renderCell: ({ value }) => <StatusBadge status={value} /> },
-                { field: 'working_hours', headerName: 'Hours', renderCell: ({ value }) => value ? `${value}h` : '—' },
-              ]}
-              rows={employee.attendance || []}
-              emptyTitle="No attendance records"
+            <InfoRow
+              label="Emergency Contact"
+              value={employee.emergency_contact_name ? `${employee.emergency_contact_name} (${employee.emergency_contact_phone})` : null}
             />
-          </TabPanel>
+          </Card>
+        </Grid>
 
-          <TabPanel value={tab} index={5}>
-            {(employee.projects || []).map((p) => (
-              <Box key={p.id} py={1.5} borderBottom={`1px solid ${colors.border}`}>
-                <Typography fontWeight={500}>{p.name}</Typography>
-                <Typography variant="body2" color="text.secondary">{p.status}</Typography>
-              </Box>
-            ))}
-            {!employee.projects?.length && <EmptyState title="No projects" />}
-          </TabPanel>
+        {/* Remaining details sit beside the vertical profile card */}
+        <Grid size={{ xs: 12, md: 8 }}>
+          <Card padding={0}>
+            <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2, borderBottom: `1px solid ${colors.border}` }}>
+              {tabs.map((label) => (
+                <Tab key={label} label={label} />
+              ))}
+            </Tabs>
 
-          <TabPanel value={tab} index={6}>
-            <DataTable
-              columns={[
-                { field: 'leave_type_name', headerName: 'Type' },
-                { field: 'start_date', headerName: 'From', renderCell: ({ value }) => formatDate(value) },
-                { field: 'end_date', headerName: 'To', renderCell: ({ value }) => formatDate(value) },
-                { field: 'days', headerName: 'Days' },
-                { field: 'status', headerName: 'Status', renderCell: ({ value }) => <StatusBadge status={value} /> },
-              ]}
-              rows={employee.leaves || []}
-              emptyTitle="No leave records"
-            />
-          </TabPanel>
+            <Box px={3} pb={3}>
+              {professionalIndex !== -1 && (
+                <TabPanel value={tab} index={professionalIndex}>
+                  <InfoRow label="Department" value={employee.department_name} />
+                  <InfoRow label="Designation" value={employee.designation} />
+                  <InfoRow label="Employment Type" value={employee.employment_type} />
+                  <InfoRow label="Joining Date" value={formatDate(employee.joining_date)} />
+                  <InfoRow label="Reporting Manager" value={employee.manager_name} />
+                  <InfoRow label="Employment Status" value={employee.employment_status} />
+                </TabPanel>
+              )}
 
-          <TabPanel value={tab} index={7}>
-            {(isAdminOnly || isHr) && !isOwnProfile && (
-              <Box mb={2}>
-                <input type="file" id="emp-profile-doc" hidden multiple onChange={handleDocUpload} />
-                <label htmlFor="emp-profile-doc">
-                  <Button component="span" variant="outlined" size="small" startIcon={<Upload size={16} />}>Upload Document</Button>
-                </label>
-              </Box>
-            )}
-            {(employee.documents || []).map((d) => (
-              <Box key={d.id} display="flex" justifyContent="space-between" py={1.5} borderBottom={`1px solid ${colors.border}`}>
-                <Box>
-                  <Typography fontWeight={500}>{d.title}</Typography>
-                  <Typography variant="caption" color="text.secondary">{d.type.replace('_', ' ')}</Typography>
-                </Box>
-                <Typography component="button" onClick={() => handleDocDownload(d)} color="primary" variant="body2" sx={{ border: 'none', bgcolor: 'transparent', cursor: 'pointer' }}>Download</Typography>
-              </Box>
-            ))}
-            {!employee.documents?.length && <EmptyState title="No documents" />}
-          </TabPanel>
-        </Box>
-      </Card>
+              {bankIndex !== -1 && (
+                <TabPanel value={tab} index={bankIndex}>
+                  <InfoRow label="Bank Name" value={employee.bank_name} />
+                  <InfoRow label="Account Holder" value={employee.bank_account_holder} />
+                  <InfoRow label="Account Number" value={employee.bank_account_number} />
+                  <InfoRow label="IFSC Code" value={employee.bank_ifsc} />
+                  <InfoRow label="Branch" value={employee.bank_branch} />
+                  <InfoRow label="PAN" value={employee.pan_number} />
+                  <InfoRow label="Aadhar" value={employee.aadhar_number} />
+                </TabPanel>
+              )}
+
+              {salaryIndex !== -1 && (
+                <TabPanel value={tab} index={salaryIndex}>
+                  {employee.salary ? (
+                    <>
+                      <InfoRow label="Basic Salary" value={formatCurrency(employee.salary.basic_salary)} />
+                      <InfoRow label="HRA" value={formatCurrency(employee.salary.hra)} />
+                      <InfoRow label="Transport" value={formatCurrency(employee.salary.transport_allowance)} />
+                      <InfoRow label="Medical" value={formatCurrency(employee.salary.medical_allowance)} />
+                      <InfoRow label="Special Allowance" value={formatCurrency(employee.salary.special_allowance)} />
+                      <InfoRow label="Bonus" value={formatCurrency(employee.salary.bonus)} />
+                      <Divider sx={{ my: 2 }} />
+                      <InfoRow label="PF Deduction" value={formatCurrency(employee.salary.pf_deduction)} />
+                      <InfoRow label="Tax Deduction" value={formatCurrency(employee.salary.tax_deduction)} />
+                      <InfoRow label="Other Deductions" value={formatCurrency(employee.salary.other_deductions)} />
+                      <Divider sx={{ my: 2 }} />
+                      <InfoRow label="Net Salary" value={formatCurrency(employee.salary.net_salary)} />
+                    </>
+                  ) : <EmptyState title="No salary data" description="Salary structure not configured." />}
+                </TabPanel>
+              )}
+
+              {attendanceIndex !== -1 && (
+                <TabPanel value={tab} index={attendanceIndex}>
+                  <DataTable
+                    columns={[
+                      { field: 'date', headerName: 'Date', renderCell: ({ value }) => formatDate(value) },
+                      { field: 'status', headerName: 'Status', renderCell: ({ value }) => <StatusBadge status={value} /> },
+                      { field: 'working_hours', headerName: 'Hours', renderCell: ({ value }) => value ? `${value}h` : '—' },
+                    ]}
+                    rows={employee.attendance || []}
+                    emptyTitle="No attendance records"
+                  />
+                </TabPanel>
+              )}
+
+              {projectsIndex !== -1 && (
+                <TabPanel value={tab} index={projectsIndex}>
+                  {(employee.projects || []).map((p) => (
+                    <Box key={p.id} py={1.5} borderBottom={`1px solid ${colors.border}`}>
+                      <Typography fontWeight={500}>{p.name}</Typography>
+                      <Typography variant="body2" color="text.secondary">{p.status}</Typography>
+                    </Box>
+                  ))}
+                  {!employee.projects?.length && <EmptyState title="No projects" />}
+                </TabPanel>
+              )}
+
+              {leavesIndex !== -1 && (
+                <TabPanel value={tab} index={leavesIndex}>
+                  <DataTable
+                    columns={[
+                      { field: 'leave_type_name', headerName: 'Type' },
+                      { field: 'start_date', headerName: 'From', renderCell: ({ value }) => formatDate(value) },
+                      { field: 'end_date', headerName: 'To', renderCell: ({ value }) => formatDate(value) },
+                      { field: 'days', headerName: 'Days' },
+                      { field: 'status', headerName: 'Status', renderCell: ({ value }) => <StatusBadge status={value} /> },
+                    ]}
+                    rows={employee.leaves || []}
+                    emptyTitle="No leave records"
+                  />
+                </TabPanel>
+              )}
+
+              {documentsIndex !== -1 && (
+                <TabPanel value={tab} index={documentsIndex}>
+                  {(isAdminOnly || isHr) && !isOwnProfile && (
+                    <Box mb={2}>
+                      <input type="file" id="emp-profile-doc" hidden multiple onChange={handleDocUpload} />
+                      <label htmlFor="emp-profile-doc">
+                        <Button component="span" variant="outlined" size="small" startIcon={<Upload size={16} />}>Upload Document</Button>
+                      </label>
+                    </Box>
+                  )}
+                  {(employee.documents || []).map((d) => (
+                    <Box key={d.id} display="flex" justifyContent="space-between" py={1.5} borderBottom={`1px solid ${colors.border}`}>
+                      <Box>
+                        <Typography fontWeight={500}>{d.title}</Typography>
+                        <Typography variant="caption" color="text.secondary">{d.type.replace('_', ' ')}</Typography>
+                      </Box>
+                      <Typography component="button" onClick={() => handleDocDownload(d)} color="primary" variant="body2" sx={{ border: 'none', bgcolor: 'transparent', cursor: 'pointer' }}>Download</Typography>
+                    </Box>
+                  ))}
+                  {!employee.documents?.length && <EmptyState title="No documents" />}
+                </TabPanel>
+              )}
+
+              {showPasswordTab && passwordTabIndex !== -1 && (
+                <TabPanel value={tab} index={passwordTabIndex}>
+                  <Box component="form" onSubmit={handleSubmit(onChangePassword)} maxWidth={480}>
+                    <Grid container spacing={2}>
+                      <Grid size={12}>
+                        <Input label="Current Password" type="password" error={errors.currentPassword?.message} {...register('currentPassword', { required: 'Required' })} />
+                      </Grid>
+                      <Grid size={12}>
+                        <Input label="New Password" type="password" error={errors.newPassword?.message} {...register('newPassword', { required: 'Required', minLength: { value: 6, message: 'Min 6 characters' } })} />
+                      </Grid>
+                      <Grid size={12}>
+                        <Input label="Confirm New Password" type="password" error={errors.confirmPassword?.message} {...register('confirmPassword', { required: 'Required' })} />
+                      </Grid>
+                      <Grid size={12}>
+                        <Button type="submit" loading={changingPassword}>
+                          Update Password
+                        </Button>
+                      </Grid>
+                    </Grid>
+                  </Box>
+                </TabPanel>
+              )}
+            </Box>
+          </Card>
+        </Grid>
+      </Grid>
 
       <EmployeeEditModal
         open={editOpen}

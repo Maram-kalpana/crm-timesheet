@@ -3,7 +3,7 @@ import { Box, Typography, List, ListItem, ListItemText, IconButton } from '@mui/
 import { Bell, CheckCheck } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { notificationAPI } from '../../services/services';
-import { PageHeader, Card, Button, Loader, EmptyState } from '../../components/ui';
+import { Card, Button, Loader, EmptyState } from '../../components/ui';
 import { colors } from '../../theme';
 import { formatDateTime, getErrorMessage } from '../../utils/helpers';
 
@@ -61,18 +61,13 @@ const Notifications = () => {
 
   return (
     <Box>
-      <PageHeader
-        title="Notifications"
-        subtitle={unreadCount ? `${unreadCount} unread notifications` : 'All caught up!'}
-        breadcrumb={[{ label: 'Notifications', path: '/notifications' }]}
-        action={
-          unreadCount > 0 && (
-            <Button variant="outlined" startIcon={<CheckCheck size={18} />} onClick={markAllRead}>
-              Mark all read
-            </Button>
-          )
-        }
-      />
+      {unreadCount > 0 && (
+        <Box display="flex" justifyContent="flex-end" mb={2}>
+          <Button variant="outlined" startIcon={<CheckCheck size={18} />} onClick={markAllRead}>
+            Mark all read
+          </Button>
+        </Box>
+      )}
 
       <Card>
         {!notifications.length ? (

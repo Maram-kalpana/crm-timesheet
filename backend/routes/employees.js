@@ -36,7 +36,131 @@ const mapEmployeeTypeToRole = (type) => {
   return 'employee';
 };
 
-router.get('/assignable', authenticate, authorize('admin'), async (req, res, next) => {
+// --- Validation patterns (mirrors the frontend Add Employee form) ---
+const PATTERNS = {
+  name: /^[A-Za-z\s.'-]+$/,
+  email: /^\S+@\S+\.\S+$/,
+  phone: /^[6-9]\d{9}$/,
+  pincode: /^\d{6}$/,
+  pan: /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/,
+  aadhaar: /^\d{12}$/,
+  ifsc: /^[A-Z]{4}0[A-Z0-9]{6}$/,
+  accountNumber: /^\d{9,18}$/,
+};
+
+const isBlank = (v) => v === undefined || v === null || String(v).trim() === '';
+
+// Validates the "Add Employee" payload and returns an array of human-readable
+// error messages (empty array = valid). Kept as a plain function (not
+// express-validator/joi) so it slots into the existing route style without
+// adding a new dependency.
+function validateEmployeePayload(body) {
+  const errors = [];
+  const req_ = (key, label) => {
+    if (isBlank(body[key])) errors.push(`${label} is required.`);
+  };
+  const pattern = (key, label, re, msg) => {
+    if (!isBlank(body[key]) && !re.test(String(body[key]).trim())) {
+      errors.push(msg || `${label} format is invalid.`);
+    }
+  };
+
+  // Login credentials
+  req_('email', 'Email');
+  pattern('email', 'Email', PATTERNS.email, 'Enter a valid email address.');
+  if (!isBlank(body.password) && String(body.password).length < 6) {
+    errors.push('Password must be at least 6 characters.');
+  }
+
+  // Personal information
+  req_('firstName', 'First name');
+  pattern('firstName', 'First name', PATTERNS.name, 'First name must contain only letters.');
+  req_('lastName', 'Last name');
+  pattern('lastName', 'Last name', PATTERNS.name, 'Last name must contain only letters.');
+  req_('phone', 'Phone');
+  pattern('phone', 'Phone', PATTERNS.phone, 'Enter a valid 10-digit phone number.');
+  req_('dateOfBirth', 'Date of birth');
+  if (!isBlank(body.dateOfBirth)) {
+    const dob = new Date(body.dateOfBirth);
+    if (Number.isNaN(dob.getTime())) {
+      errors.push('Date of birth is invalid.');
+    } else {
+      const age = (Date.now() - dob.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
+      if (age < 18) errors.push('Employee must be at least 18 years old.');
+    }
+  }
+  req_('gender', 'Gender');
+  req_('address', 'Address');
+  req_('city', 'City');
+  pattern('city', 'City', PATTERNS.name, 'City must contain only letters.');
+  req_('state', 'State');
+  pattern('state', 'State', PATTERNS.name, 'State must contain only letters.');
+  req_('pincode', 'Pincode');
+  pattern('pincode', 'Pincode', PATTERNS.pincode, 'Enter a valid 6-digit pincode.');
+  req_('emergencyContactName', 'Emergency contact name');
+  pattern('emergencyContactName', 'Emergency contact name', PATTERNS.name, 'Emergency contact name must contain only letters.');
+  req_('emergencyContactPhone', 'Emergency contact phone');
+  pattern('emergencyContactPhone', 'Emergency contact phone', PATTERNS.phone, 'Enter a valid 10-digit emergency contact phone number.');
+
+  // Professional information
+  req_('departmentId', 'Department');
+  req_('designation', 'Designation');
+  pattern('designation', 'Designation', PATTERNS.name, 'Designation must contain only letters.');
+  req_('joiningDate', 'Joining date');
+  req_('employmentType', 'Employment type');
+
+  // Bank & government details
+  req_('bankName', 'Bank name');
+  pattern('bankName', 'Bank name', PATTERNS.name, 'Bank name must contain only letters.');
+  req_('bankAccountNumber', 'Account number');
+  pattern('bankAccountNumber', 'Account number', PATTERNS.accountNumber, 'Enter a valid account number (9-18 digits).');
+  req_('bankIfsc', 'IFSC code');
+  pattern('bankIfsc', 'IFSC code', PATTERNS.ifsc, 'Enter a valid IFSC code (e.g. HDFC0001234).');
+  req_('bankBranch', 'Branch');
+  req_('bankAccountHolder', 'Account holder name');
+  pattern('bankAccountHolder', 'Account holder name', PATTERNS.name, 'Account holder name must contain only letters.');
+  req_('panNumber', 'PAN');
+  pattern('panNumber', 'PAN', PATTERNS.pan, 'Enter a valid PAN (e.g. ABCDE1234F).');
+  req_('aadharNumber', 'Aadhaar');
+  pattern('aadharNumber', 'Aadhaar', PATTERNS.aadhaar, 'Enter a valid 12-digit Aadhaar number.');
+
+  // Salary structure
+  const nonNegativeFields = [
+    ['hra', 'HRA'],
+    ['transportAllowance', 'Transport allowance'],
+    ['medicalAllowance', 'Medical allowance'],
+    ['specialAllowance', 'Special allowance'],
+    ['bonus', 'Bonus'],
+    ['pfDeduction', 'PF deduction'],
+    ['taxDeduction', 'Tax deduction'],
+    ['otherDeductions', 'Other deductions'],
+  ];
+  req_('basicSalary', 'Basic salary');
+  if (!isBlank(body.basicSalary)) {
+    const n = Number(body.basicSalary);
+    if (Number.isNaN(n) || n <= 0) errors.push('Basic salary must be a number greater than 0.');
+  }
+  nonNegativeFields.forEach(([key, label]) => {
+    req_(key, label);
+    if (!isBlank(body[key])) {
+      const n = Number(body[key]);
+      if (Number.isNaN(n) || n < 0) errors.push(`${label} must be a number that is not negative.`);
+    }
+  });
+
+  // Team lead must have at least one team member
+  if (mapEmployeeTypeToRole(body.employeeType) === 'team_lead') {
+    if (!Array.isArray(body.teamMemberIds) || !body.teamMemberIds.length) {
+      errors.push('At least one team member is required for a Team Lead.');
+    }
+  }
+
+  return errors;
+}
+
+// CHANGED: was authorize('admin') only. HR can now create Team Leads from the
+// frontend and needs this list to populate the "Team Members" picker.
+router.get('/assignable', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
   try {
     const { search } = req.query;
     let where = "WHERE u.role = 'employee' AND u.is_active = TRUE";
@@ -221,6 +345,20 @@ router.get('/:id', authenticate, async (req, res, next) => {
 router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
+    // Validate the full payload up front, before starting the transaction
+    // or touching the DB, and before rolling forward with defaults for
+    // anything missing (mirrors the mandatory-field rules on the frontend
+    // "Add Employee" form).
+    const validationErrors = validateEmployeePayload(req.body);
+    if (validationErrors.length) {
+      connection.release();
+      return res.status(400).json({
+        success: false,
+        message: validationErrors[0],
+        errors: validationErrors,
+      });
+    }
+
     await connection.beginTransaction();
 
     const {
@@ -232,26 +370,13 @@ router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) 
       panNumber, aadharNumber,
       bankName, bankAccountNumber, bankIfsc, bankBranch, bankAccountHolder,
       basicSalary, hra, transportAllowance, medicalAllowance, specialAllowance,
-      allowances, pfDeduction, taxDeduction, otherDeductions, deductions, ctc,
+      bonus, allowances, pfDeduction, taxDeduction, otherDeductions, deductions, ctc, netSalary,
       teamMemberIds = [],
     } = req.body;
 
     const role = mapEmployeeTypeToRole(employeeType);
     if (!canManageRole(req.user.role, role)) {
       return res.status(403).json({ success: false, message: 'You cannot create this employee type.' });
-    }
-
-    if (!email || !firstName || !lastName) {
-      return res.status(400).json({ success: false, message: 'Email, first name, and last name are required.' });
-    }
-
-    const emailRe = /^\S+@\S+\.\S+$/;
-    if (!emailRe.test(email)) {
-      return res.status(400).json({ success: false, message: 'Invalid email format.' });
-    }
-
-    if (password && String(password).length < 6) {
-      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
     }
 
     const [existingEmail] = await connection.query('SELECT id FROM users WHERE email = ?', [email]);
@@ -306,23 +431,37 @@ router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) 
       );
     }
 
-    const hasSalary = basicSalary || ctc || hra || transportAllowance || medicalAllowance || specialAllowance || allowances;
+    // CHANGED: bonus is now part of the "has salary data" check and is persisted,
+    // along with net_salary (trusted from the client's live calculation, but
+    // recomputed server-side as a fallback / integrity check).
+    // Salary is now always required by validateEmployeePayload, so hasSalary
+    // will always be true past that check — kept as a guard in case
+    // validation is ever relaxed for a specific employee type.
+    const hasSalary = basicSalary || ctc || hra || transportAllowance || medicalAllowance || specialAllowance || bonus || allowances;
     if (hasSalary) {
       const basic = Number(basicSalary) || Number(ctc) * 0.4 || 0;
       const hraVal = Number(hra) || (basic ? basic * 0.4 : 0);
       const transportVal = Number(transportAllowance) || 0;
       const medicalVal = Number(medicalAllowance) || 0;
       const specialVal = Number(specialAllowance ?? allowances) || 0;
+      const bonusVal = Number(bonus) || 0;
       const pfVal = Number(pfDeduction) || 0;
       const taxVal = Number(taxDeduction) || 0;
       const otherDeductionVal = Number(otherDeductions ?? deductions) || 0;
+
+      const computedNet = basic + hraVal + transportVal + medicalVal + specialVal + bonusVal
+        - pfVal - taxVal - otherDeductionVal;
+      const netVal = netSalary !== undefined && netSalary !== null && netSalary !== ''
+        ? Number(netSalary)
+        : computedNet;
+
       await connection.query(`
         INSERT INTO salary_structures (employee_id, basic_salary, hra, transport_allowance, medical_allowance,
-          special_allowance, pf_deduction, tax_deduction, other_deductions, effective_from)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          special_allowance, bonus, pf_deduction, tax_deduction, other_deductions, net_salary, effective_from)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
-        newEmpId, basic, hraVal, transportVal, medicalVal, specialVal, pfVal, taxVal, otherDeductionVal,
-        joiningDate || new Date().toISOString().split('T')[0],
+        newEmpId, basic, hraVal, transportVal, medicalVal, specialVal, bonusVal, pfVal, taxVal, otherDeductionVal,
+        netVal, joiningDate || new Date().toISOString().split('T')[0],
       ]);
     }
 

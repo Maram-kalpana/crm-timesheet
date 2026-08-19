@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Grid, Box, Typography, LinearProgress, Chip } from '@mui/material';
-import { Clock, CalendarDays, FolderKanban, Wallet, Megaphone, Palmtree } from 'lucide-react';
+import { Clock, CalendarDays, FolderKanban, Wallet, Palmtree } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { dashboardAPI } from '../../services/services';
-import { StatCard, PageHeader, Card, Loader, StatusBadge, Button } from '../../components/ui';
+import { StatCard, Card, Loader, StatusBadge, Button } from '../../components/ui';
 import { colors } from '../../theme';
 import { formatDate, formatCurrency, calculateWorkingTime } from '../../utils/helpers';
 
@@ -36,12 +36,6 @@ const EmployeeDashboard = () => {
 
   return (
     <Box>
-      <PageHeader
-        title={`Good ${new Date().getHours() < 12 ? 'morning' : 'afternoon'}, ${user?.firstName}!`}
-        subtitle="Here's your overview for today."
-        breadcrumb={[{ label: 'Dashboard', path: '/dashboard' }]}
-      />
-
       <Grid container spacing={2} mb={3}>
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard title="Today's Status" value={att?.status || 'Not Clocked In'} icon={Clock} color={colors.primary} />

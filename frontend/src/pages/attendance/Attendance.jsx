@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '../../context/AuthContext';
 import { attendanceAPI } from '../../services/services';
 import {
-  PageHeader, Card, Button, DataTable, StatusBadge, Loader, SearchBar, Select, CameraCapture,
+  Card, Button, DataTable, StatusBadge, Loader, SearchBar, Select, CameraCapture,
 } from '../../components/ui';
 import { colors } from '../../theme';
 import { formatDate, calculateWorkingTime, getErrorMessage, downloadBlob, monthNames } from '../../utils/helpers';
@@ -200,17 +200,6 @@ const Attendance = () => {
 
   return (
     <Box>
-      <PageHeader
-        title="Attendance"
-        subtitle={
-          isAdminOnly ? 'View organization attendance records'
-            : isTeamLead ? 'View your team attendance records'
-              : isHr ? 'View employee attendance records'
-                : 'Track your daily attendance and working hours'
-        }
-        breadcrumb={[{ label: 'Attendance', path: '/attendance' }]}
-      />
-
       <Grid container spacing={3} mb={3}>
         {canClockInOut && (
           <Grid size={{ xs: 12, lg: 8 }}>
@@ -304,7 +293,7 @@ const Attendance = () => {
         <Grid size={{ xs: 12, lg: canClockInOut ? 4 : 12 }}>
           <Card title="Monthly Summary">
             <Box display="flex" flexDirection="column" gap={2}>
-              {['present', 'late', 'absent', 'on-leave'].map((status) => {
+              {['present', 'absent'].map((status) => {
                 const count = rows.filter((h) => h.status === status).length;
                 return (
                   <Box key={status} display="flex" justifyContent="space-between" alignItems="center">

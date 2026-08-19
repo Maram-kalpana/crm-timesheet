@@ -5,7 +5,7 @@ import { toast } from 'react-toastify';
 import { useAuth } from '../../context/AuthContext';
 import { documentAPI, employeeAPI } from '../../services/services';
 import {
-  PageHeader, Card, Button, Select, EmptyState, Loader, ConfirmDialog,
+  Card, Button, Select, EmptyState, Loader, ConfirmDialog,
 } from '../../components/ui';
 import { colors } from '../../theme';
 import { formatDate, getErrorMessage, downloadBlob } from '../../utils/helpers';
@@ -120,12 +120,6 @@ const Documents = () => {
 
   return (
     <Box>
-      <PageHeader
-        title="Documents"
-        subtitle={canUpload ? 'Manage employee documents' : 'Your documents and letters'}
-        breadcrumb={[{ label: 'Documents', path: '/documents' }]}
-      />
-
       <Box display="flex" gap={2} mb={3} alignItems="center" flexWrap="wrap">
         <Box sx={{ flex: 1, minWidth: 200 }}>
           <Select

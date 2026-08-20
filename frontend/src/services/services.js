@@ -100,13 +100,15 @@ export const timesheetAPI = {
   sendMail: (data) => api.post('/timesheets/send-mail', data),
   sendToClient: (data) => api.post('/timesheets/send-to-client', data),
   exportExcel: (data) => api.post('/timesheets/export-excel', data, { responseType: 'blob' }),
-  // Add inside the existing timesheetAPI = { ... } object:
-getInvoices: () => api.get('/timesheets/invoices'),
-getInvoiceDetail: (id) => api.get(`/timesheets/invoices/${id}`),
-logInvoicePayment: (id, formData) => api.post(`/timesheets/invoices/${id}/payments`, formData, {
-  headers: { 'Content-Type': 'multipart/form-data' },
-}),
-markInvoiceNotReceived: (id, reason) => api.put(`/timesheets/invoices/${id}/not-received`, { reason }),
+
+  // Invoice / payment tracking (created automatically by sendToClient)
+  getInvoices: (params) => api.get('/timesheets/invoices', { params }),
+  getInvoiceDetail: (id) => api.get(`/timesheets/invoices/${id}`),
+  // formData: transactionId, amount, date, notes?, receipt?(file)
+  logInvoicePayment: (id, formData) => api.post(`/timesheets/invoices/${id}/payments`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  markInvoiceNotReceived: (id, reason) => api.put(`/timesheets/invoices/${id}/not-received`, { reason }),
 };
 
 export const resignationAPI = {

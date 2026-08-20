@@ -19,6 +19,10 @@ const MONTH_NAMES = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+// --- ADDED: standard hours-per-day used to convert a Daily/Monthly rate
+// into an hourly figure for the table. ---
+const STANDARD_HOURS_PER_DAY = 8;
+
 const emptyForm = {
   client: "",
   managerName: "",
@@ -49,6 +53,21 @@ function getMondayOfISOWeek(year, week) {
 function parseWeekValue(weekStr) {
   const [yearPart, weekPart] = weekStr.split("-W");
   return getMondayOfISOWeek(parseInt(yearPart, 10), parseInt(weekPart, 10));
+}
+
+// --- ADDED: number of calendar days in the month containing `date`. ---
+function daysInMonthOf(date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+}
+
+// --- ADDED: same as above but from an ISO "YYYY-MM-DD" string (used in
+// ViewModal, where we only have entryDate strings, not Date objects tied
+// to the live form state). Parsed manually to avoid timezone shifting. ---
+function daysInMonthFromISO(dateStr) {
+  if (!dateStr) return 30;
+  const [y, m] = dateStr.split("-").map(Number);
+  if (!y || !m) return 30;
+  return new Date(y, m, 0).getDate();
 }
 
 function buildWeeklyRows(weekValue) {
@@ -120,6 +139,30 @@ function mapListItem(row) {
     sentToClient: !!row.sent_to_client_at,
     sentAt: row.sent_to_client_at ? new Date(row.sent_to_client_at).toLocaleString() : "",
     clientEmail: row.client_email || "",
+
+    // --- ADDED: invoice fields (were previously dropped by this mapper,
+    // which caused AccountantBilling to always see invoiceId as null) ---
+    // Kept snake_case to match what AccountantBilling.jsx reads directly.
+    sent_to_client_at: row.sent_to_client_at,
+    invoice_id: row.invoice_id,
+    invoice_status: row.invoice_status,
+    invoice_total_amount: row.invoice_total_amount,
+    invoice_amount_received: row.invoice_amount_received,
+    invoice_client_email: row.invoice_client_email,
+
+    // Also keep raw snake_case for the other fields AccountantBilling reads
+    // directly (it falls back to these via `??` if the camelCase one is
+    // absent, but passing them through removes any ambiguity).
+    rate_value: row.rate_value,
+    rate_type: row.rate_type,
+    total_hours: row.total_hours,
+    total_wage: row.total_wage,
+    emp_code: row.emp_code,
+    period_label: row.period_label,
+    period_type: row.period_type,
+    client_email: row.client_email,
+    first_name: row.first_name,
+    last_name: row.last_name,
   };
 }
 
@@ -395,7 +438,23 @@ function ViewModal({ entry, onClose }) {
   if (!entry) return null;
   const rate = parseFloat(entry.rateValue) || 0;
   const totalHrs = (entry.rows || []).reduce((sum, r) => sum + (parseFloat(r.hrs) || 0), 0);
-  const totalWage = totalHrs * rate;
+
+  // --- CHANGED: fixed conversion instead of dividing by the hours entered.
+  // Hourly: rate is already per hour.
+  // Daily: rate / 8 standard hours = per-hour.
+  // Monthly: rate / actual days in that calendar month = per-day,
+  //          then per-day / 8 standard hours = per-hour.
+  // The reference month is taken from the first row's entryDate.
+  const referenceDateStr = entry.rows && entry.rows[0] ? entry.rows[0].entryDate : null;
+  const effectiveRate = useMemo(() => {
+    if (entry.rateType === "Hourly") return rate;
+    if (entry.rateType === "Daily") return rate / STANDARD_HOURS_PER_DAY;
+    const days = daysInMonthFromISO(referenceDateStr);
+    const perDay = days > 0 ? rate / days : 0;
+    return perDay / STANDARD_HOURS_PER_DAY;
+  }, [entry.rateType, rate, referenceDateStr]);
+
+  const totalWage = totalHrs * effectiveRate;
 
   return (
     <div
@@ -473,7 +532,7 @@ function ViewModal({ entry, onClose }) {
 
         <TimesheetTable
           rows={entry.rows || []}
-          rate={rate}
+          rate={effectiveRate}
           editable={false}
           totalHrs={totalHrs}
           totalWage={totalWage}
@@ -555,6 +614,19 @@ export default function Timesheet() {
     return "";
   }, [form.periodType, weekValue, monthValue, yearValue]);
 
+  // --- ADDED: reference date used to determine "days in that month" for a
+  // Monthly rate. For Weekly period, that's the Monday of the selected
+  // week; for Monthly period, the 1st of the selected month. ---
+  const periodReferenceDate = useMemo(() => {
+    if (form.periodType === "Weekly" && weekValue) {
+      return parseWeekValue(weekValue);
+    }
+    if (form.periodType === "Monthly") {
+      return new Date(yearValue, monthValue - 1, 1);
+    }
+    return new Date();
+  }, [form.periodType, weekValue, monthValue, yearValue]);
+
   const fetchHistory = useCallback(async () => {
     setLoading(true);
     try {
@@ -613,7 +685,21 @@ export default function Timesheet() {
     () => rows.reduce((sum, r) => sum + (parseFloat(r.hrs) || 0), 0),
     [rows]
   );
-  const totalWage = totalHrs * rate;
+
+  // --- CHANGED: fixed conversion, independent of hours entered.
+  // Hourly: rate is already per hour.
+  // Daily: rate / 8 standard hours = per-hour.
+  // Monthly: rate / actual days in the reference month = per-day,
+  //          then per-day / 8 standard hours = per-hour. ---
+  const effectiveRate = useMemo(() => {
+    if (form.rateType === "Hourly") return rate;
+    if (form.rateType === "Daily") return rate / STANDARD_HOURS_PER_DAY;
+    const days = daysInMonthOf(periodReferenceDate);
+    const perDay = days > 0 ? rate / days : 0;
+    return perDay / STANDARD_HOURS_PER_DAY;
+  }, [form.rateType, rate, periodReferenceDate]);
+
+  const totalWage = totalHrs * effectiveRate;
 
   const resetForm = () => {
     setForm(emptyForm);
@@ -968,7 +1054,7 @@ export default function Timesheet() {
 
           <TimesheetTable
             rows={rows}
-            rate={rate}
+            rate={effectiveRate}
             editable
             onTaskChange={updateTask}
             onHrsChange={updateHrs}

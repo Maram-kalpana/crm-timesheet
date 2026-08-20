@@ -41,6 +41,9 @@ const Sidebar = ({ mobileOpen, onMobileClose, collapsed, onToggleCollapse }) => 
     return item.roles.includes(role);
   });
 
+  // --- ADDED: precomputed role/designation label so the JSX below stays readable. ---
+  const roleLabel = [user?.role, user?.designation].filter(Boolean).join(' · ');
+
   const drawerContent = (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', color: '#fff' }}>
       <Box sx={{ px: 1.5, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', minHeight: 64 }}>
@@ -100,6 +103,13 @@ const Sidebar = ({ mobileOpen, onMobileClose, collapsed, onToggleCollapse }) => 
       </List>
 
       <Divider sx={{ borderColor: 'rgba(255,255,255,0.12)' }} />
+      {/*
+        --- CHANGED: footer redesigned into two rows instead of one cramped
+        row. Row 1: avatar + name + logout icon (icon has a fixed, reserved
+        slot so it never collides with text). Row 2: role/designation on
+        its own full-width line with a proper ellipsis + tooltip showing
+        the full text on hover, instead of being clipped mid-word.
+      */}
       <Box sx={{ p: 1.5 }}>
         <Box display="flex" alignItems="center" gap={1}>
           <Avatar
@@ -108,27 +118,42 @@ const Sidebar = ({ mobileOpen, onMobileClose, collapsed, onToggleCollapse }) => 
             size={collapsed && !isMobile ? 32 : 36}
           />
           {(!collapsed || isMobile) && (
-            <Box flex={1} minWidth={0}>
-              <Typography variant="body2" fontWeight={600} noWrap color="#fff" sx={{ fontSize: '0.82rem' }}>
-                {user?.firstName} {user?.lastName}
-              </Typography>
-              <Typography variant="caption" noWrap sx={{ textTransform: 'capitalize', color: 'rgba(255,255,255,0.65)', fontSize: '0.7rem' }}>
-                {user?.role} {user?.designation ? `· ${user.designation}` : ''}
-              </Typography>
-            </Box>
-          )}
-          {(!collapsed || isMobile) && (
-            <Tooltip title="Logout">
-              <IconButton
-                size="small"
-                onClick={() => { logout(); navigate('/login'); }}
-                sx={{ color: '#F87171', '&:hover': { bgcolor: 'rgba(248,113,113,0.15)' } }}
-              >
-                <LogOut size={16} />
-              </IconButton>
-            </Tooltip>
+            <>
+              <Box flex={1} minWidth={0}>
+                <Typography variant="body2" fontWeight={600} noWrap color="#fff" sx={{ fontSize: '0.82rem' }}>
+                  {user?.firstName} {user?.lastName}
+                </Typography>
+              </Box>
+              <Tooltip title="Logout">
+                <IconButton
+                  size="small"
+                  onClick={() => { logout(); navigate('/login'); }}
+                  sx={{ color: '#F87171', flexShrink: 0, '&:hover': { bgcolor: 'rgba(248,113,113,0.15)' } }}
+                >
+                  <LogOut size={16} />
+                </IconButton>
+              </Tooltip>
+            </>
           )}
         </Box>
+        {(!collapsed || isMobile) && roleLabel && (
+          <Tooltip title={roleLabel}>
+            <Typography
+              variant="caption"
+              noWrap
+              sx={{
+                display: 'block',
+                textTransform: 'capitalize',
+                color: 'rgba(255,255,255,0.65)',
+                fontSize: '0.7rem',
+                mt: 0.5,
+                ml: '44px', // aligns under the name (avatar width + gap)
+              }}
+            >
+              {roleLabel}
+            </Typography>
+          </Tooltip>
+        )}
       </Box>
     </Box>
   );

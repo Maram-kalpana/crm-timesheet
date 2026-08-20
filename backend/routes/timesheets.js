@@ -1,4 +1,7 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { canViewAllTimesheets, canSendClientBilling } = require('../middleware/rbac');
@@ -14,17 +17,101 @@ const { generateClientTimesheetExcel } = require('../utils/excel');
 
 const router = express.Router();
 
+// ---------------------------------------------------------------------------
+// Receipt upload config (used by POST /invoices/:id/payments)
+// ---------------------------------------------------------------------------
+const RECEIPTS_DIR = path.join(__dirname, '..', 'uploads', 'invoice-receipts');
+fs.mkdirSync(RECEIPTS_DIR, { recursive: true });
+
+const receiptUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, RECEIPTS_DIR),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase();
+      const safeExt = ['.pdf', '.jpg', '.jpeg', '.png'].includes(ext) ? ext : '';
+      cb(null, `invoice-${req.params.id}-${Date.now()}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'application/pdf'];
+    if (!allowed.includes(file.mimetype)) {
+      return cb(new Error('Only JPG, PNG, or PDF receipts are allowed.'));
+    }
+    cb(null, true);
+  },
+});
+
+// Wraps multer so a bad/oversized file returns a clean 400 instead of crashing to next(error) as a 500.
+function handleReceiptUpload(req, res, next) {
+  receiptUpload.single('receipt')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ success: false, message: err.message || 'Failed to upload receipt.' });
+    }
+    next();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ADDED: shared wage-calculation helpers, mirroring the frontend's
+// fixed conversion (no longer dependent on hours entered so far).
+// Hourly: rate is already per hour.
+// Daily: rate / 8 standard hours = per-hour.
+// Monthly: rate / actual calendar days in the reference month = per-day,
+//          then per-day / 8 standard hours = per-hour.
+// ---------------------------------------------------------------------------
+const STANDARD_HOURS_PER_DAY = 8;
+
+/** Number of calendar days in the month containing an ISO "YYYY-MM-DD" (or Date) value. */
+function daysInMonthFromDateVal(dateVal) {
+  if (!dateVal) return 30;
+  let y;
+  let m;
+  if (typeof dateVal === 'string') {
+    const str = dateVal.split('T')[0];
+    [y, m] = str.split('-').map(Number);
+  } else {
+    y = dateVal.getFullYear();
+    m = dateVal.getMonth() + 1;
+  }
+  if (!y || !m) return 30;
+  return new Date(y, m, 0).getDate();
+}
+
+/**
+ * Converts a rate + rateType into a fixed per-hour rate, using
+ * `referenceDateVal` (typically the period's start date) to resolve
+ * "days in that month" for Monthly rates.
+ */
+function computeEffectiveHourlyRate(rate, rateType, referenceDateVal) {
+  const type = rateType || 'Hourly';
+  if (type === 'Hourly') return rate;
+  if (type === 'Daily') return rate / STANDARD_HOURS_PER_DAY;
+  const days = daysInMonthFromDateVal(referenceDateVal);
+  const perDay = days > 0 ? rate / days : 0;
+  return perDay / STANDARD_HOURS_PER_DAY;
+}
+
+// ---------------------------------------------------------------------------
+// Existing timesheet queries
+// ---------------------------------------------------------------------------
+
 const TIMESHEET_SELECT = `
   SELECT t.*,
          e.first_name, e.last_name,
          u.employee_id AS emp_code,
          d.name AS department_name,
-         su.email AS sent_by_email
+         su.email AS sent_by_email,
+         i.status AS invoice_status,
+         i.total_amount AS invoice_total_amount,
+         i.amount_received AS invoice_amount_received,
+         i.client_email AS invoice_client_email
   FROM timesheets t
   JOIN employees e ON t.employee_id = e.id
   JOIN users u ON e.user_id = u.id
   LEFT JOIN departments d ON e.department_id = d.id
   LEFT JOIN users su ON t.sent_by_user_id = su.id
+  LEFT JOIN invoices i ON t.invoice_id = i.id
 `;
 
 async function getEntries(timesheetId) {
@@ -192,7 +279,10 @@ router.post('/send-mail', authenticate, async (req, res, next) => {
   }
 });
 
-/** Accountant/Admin — send billing to client and mark timesheets as sent. */
+/**
+ * Accountant/Admin — send billing to client, mark timesheets as sent, and
+ * create the invoice record that payments will later be recorded against.
+ */
 router.post('/send-to-client', authenticate, async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
@@ -211,9 +301,6 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Client email is required.' });
     }
 
-    // Map of timesheetId -> overridden rate, sent by the accountant from
-    // the "Send to Client" modal. Falls back to the stored rate_value
-    // per timesheet when no override (or an invalid one) is provided.
     const overrideMap = new Map();
     if (Array.isArray(rateOverrides)) {
       rateOverrides.forEach((o) => {
@@ -246,6 +333,18 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
       });
     }
 
+    // All timesheets in one billing batch must belong to the same client + period —
+    // an invoice represents one client billing event.
+    const clients = new Set(rows.map((r) => r.client || ''));
+    const periods = new Set(rows.map((r) => r.period_label || ''));
+    if (clients.size > 1 || periods.size > 1) {
+      connection.release();
+      return res.status(400).json({
+        success: false,
+        message: 'All selected timesheets must belong to the same client and period.',
+      });
+    }
+
     const timesheetPayloads = [];
     for (const row of rows) {
       const entries = await getEntries(row.id);
@@ -254,8 +353,19 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
       const override = overrideMap.get(String(row.id));
       if (override !== undefined) {
         const hrs = parseFloat(payload.totalHrs) || 0;
+        // --- CHANGED: `override` is the TOTAL pay for the period when
+        // rate_type isn't Hourly (matches how rate_value is interpreted
+        // everywhere else). Convert it to a fixed per-hour value the same
+        // way as everywhere else — via days-in-month/8hrs — using the
+        // timesheet's own period_start as the reference month, rather
+        // than dividing by the hours on this particular timesheet. ---
+        const effectiveOverrideRate = computeEffectiveHourlyRate(
+          override,
+          row.rate_type,
+          row.period_start
+        );
         payload.rateValue = override;
-        payload.totalWage = hrs * override;
+        payload.totalWage = hrs * effectiveOverrideRate;
       }
 
       timesheetPayloads.push({ ...payload, _id: row.id });
@@ -275,13 +385,14 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
 
     const [userRows] = await connection.query('SELECT email FROM users WHERE id = ?', [req.user.id]);
     const from = userRows[0]?.email || process.env.SMTP_FROM || process.env.EMAIL_FROM;
+    const finalSubject = subject || `Timesheet Invoice - ${client} - ${periodLabel}`;
 
     const result = timesheetPayloads.length === 1
       ? await sendClientTimesheetEmail({
         from,
         to: clientEmail,
         cc: cc || undefined,
-        subject: subject || `Timesheet - ${periodLabel || client}`,
+        subject: finalSubject,
         timesheetData: {
           ...timesheetPayloads[0],
           rateValue: timesheetPayloads[0].rateValue,
@@ -293,7 +404,7 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
         from,
         to: clientEmail,
         cc: cc || undefined,
-        subject: subject || `Timesheet Invoice - ${client} - ${periodLabel}`,
+        subject: finalSubject,
         client,
         periodLabel,
         timesheets: timesheetPayloads.map((ts) => ({
@@ -313,6 +424,24 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
     }
 
     await connection.beginTransaction();
+
+    const [invoiceResult] = await connection.query(
+      `INSERT INTO invoices
+        (client, period_label, period_start, period_end, client_email, subject, total_amount, sent_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        client,
+        periodLabel,
+        rows[0].period_start,
+        rows[0].period_end,
+        clientEmail,
+        finalSubject,
+        totalAmount,
+        req.user.id,
+      ]
+    );
+    const invoiceId = invoiceResult.insertId;
+
     for (const ts of timesheetPayloads) {
       await connection.query(
         `UPDATE timesheets SET
@@ -322,9 +451,10 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
           rate_value = ?,
           total_wage = ?,
           amount_due = ?,
-          status = 'reviewed'
+          status = 'reviewed',
+          invoice_id = ?
          WHERE id = ?`,
-        [clientEmail, req.user.id, ts.rateValue, ts.totalWage, ts.totalWage, ts._id]
+        [clientEmail, req.user.id, ts.rateValue, ts.totalWage, ts.totalWage, invoiceId, ts._id]
       );
     }
     await connection.commit();
@@ -335,6 +465,7 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
       message: 'Timesheet billing sent to client successfully.',
       totalAmount,
       sentCount: rows.length,
+      invoiceId,
     });
   } catch (error) {
     await connection.rollback();
@@ -342,6 +473,211 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
     next(error);
   }
 });
+
+// ---------------------------------------------------------------------------
+// NEW: Invoice payment tracking
+// IMPORTANT: these must be declared before GET /:id so "invoices" isn't
+// swallowed by the :id param route.
+// ---------------------------------------------------------------------------
+
+/** List invoices (accountant/admin). Optional ?status= and ?client= filters. */
+router.get('/invoices', authenticate, async (req, res, next) => {
+  try {
+    if (!canSendClientBilling(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
+
+    const { status, client } = req.query;
+    const clauses = [];
+    const params = [];
+    if (status) {
+      clauses.push('i.status = ?');
+      params.push(status);
+    }
+    if (client) {
+      clauses.push('i.client = ?');
+      params.push(client);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+    const [rows] = await pool.query(
+      `SELECT i.*,
+              COUNT(t.id) AS employee_count,
+              su.email AS sent_by_email
+       FROM invoices i
+       LEFT JOIN timesheets t ON t.invoice_id = i.id
+       LEFT JOIN users su ON i.sent_by_user_id = su.id
+       ${where}
+       GROUP BY i.id
+       ORDER BY i.sent_at DESC`,
+      params
+    );
+
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Invoice detail: header + line-item timesheets + full payment history. */
+router.get('/invoices/:id', authenticate, async (req, res, next) => {
+  try {
+    if (!canSendClientBilling(req.user)) {
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
+
+    const [invoiceRows] = await pool.query('SELECT * FROM invoices WHERE id = ?', [req.params.id]);
+    if (!invoiceRows.length) {
+      return res.status(404).json({ success: false, message: 'Invoice not found.' });
+    }
+
+    const [items] = await pool.query(`${TIMESHEET_SELECT} WHERE t.invoice_id = ?`, [req.params.id]);
+    const [payments] = await pool.query(
+      `SELECT p.*, u.email AS recorded_by_email, ru.email AS reversed_by_email
+       FROM invoice_payments p
+       LEFT JOIN users u ON p.recorded_by_user_id = u.id
+       LEFT JOIN users ru ON p.reversed_by_user_id = ru.id
+       WHERE p.invoice_id = ?
+       ORDER BY p.recorded_at DESC`,
+      [req.params.id]
+    );
+
+    res.json({ success: true, data: { invoice: invoiceRows[0], items, payments } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Record a payment received from the client for an invoice.
+ * multipart/form-data: transactionId, amount, date, notes?, receipt? (pdf/jpg/png, max 10MB)
+ */
+router.post('/invoices/:id/payments', authenticate, handleReceiptUpload, async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    if (!canSendClientBilling(req.user)) {
+      connection.release();
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
+
+    const invoiceId = req.params.id;
+    const { transactionId, amount, date, notes } = req.body;
+
+    if (!transactionId || !String(transactionId).trim()) {
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Transaction ID is required.' });
+    }
+    if (String(transactionId).trim().length > 100) {
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Transaction ID is too long.' });
+    }
+
+    const amountNum = parseFloat(amount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Amount must be a positive number.' });
+    }
+
+    if (!date) {
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Date is required.' });
+    }
+    const dateObj = new Date(date);
+    if (Number.isNaN(dateObj.getTime()) || dateObj > new Date()) {
+      connection.release();
+      return res.status(400).json({ success: false, message: 'Date is invalid or in the future.' });
+    }
+
+    // Lock the invoice row so two simultaneous "record payment" requests can't race
+    // on amount_received (accountants sharing the same client are a realistic scenario).
+    await connection.beginTransaction();
+    const [invoiceRows] = await connection.query('SELECT * FROM invoices WHERE id = ? FOR UPDATE', [invoiceId]);
+    if (!invoiceRows.length) {
+      await connection.rollback();
+      connection.release();
+      return res.status(404).json({ success: false, message: 'Invoice not found.' });
+    }
+    const invoice = invoiceRows[0];
+
+    const receiptPath = req.file ? `/uploads/invoice-receipts/${req.file.filename}` : null;
+
+    await connection.query(
+      `INSERT INTO invoice_payments
+        (invoice_id, transaction_id, amount, payment_date, notes, receipt_path, recorded_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [invoiceId, String(transactionId).trim(), amountNum, date, notes ? String(notes).trim() : null, receiptPath, req.user.id]
+    );
+
+    const newAmountReceived = parseFloat(invoice.amount_received) + amountNum;
+    const newStatus = newAmountReceived >= parseFloat(invoice.total_amount) - 0.01
+      ? 'received'
+      : 'partially_received';
+
+    await connection.query('UPDATE invoices SET amount_received = ?, status = ? WHERE id = ?', [
+      newAmountReceived,
+      newStatus,
+      invoiceId,
+    ]);
+
+    await connection.commit();
+    connection.release();
+
+    res.json({
+      success: true,
+      message: 'Payment recorded.',
+      status: newStatus,
+      amountReceived: newAmountReceived,
+    });
+  } catch (error) {
+    await connection.rollback();
+    connection.release();
+    next(error);
+  }
+});
+
+/** Mark an invoice as not received (dispute, non-payment, chargeback, or correcting a mistaken entry). */
+router.put('/invoices/:id/not-received', authenticate, async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    if (!canSendClientBilling(req.user)) {
+      connection.release();
+      return res.status(403).json({ success: false, message: 'Forbidden.' });
+    }
+
+    const invoiceId = req.params.id;
+    const { reason } = req.body;
+
+    await connection.beginTransaction();
+    const [invoiceRows] = await connection.query('SELECT * FROM invoices WHERE id = ? FOR UPDATE', [invoiceId]);
+    if (!invoiceRows.length) {
+      await connection.rollback();
+      connection.release();
+      return res.status(404).json({ success: false, message: 'Invoice not found.' });
+    }
+
+    // Soft-reverse: keep the payment rows for audit history, just flag them.
+    await connection.query(
+      `UPDATE invoice_payments SET reversed_at = NOW(), reversed_by_user_id = ?, reversed_reason = ?
+       WHERE invoice_id = ? AND reversed_at IS NULL`,
+      [req.user.id, reason ? String(reason).trim() : null, invoiceId]
+    );
+
+    await connection.query(`UPDATE invoices SET amount_received = 0, status = 'not_received' WHERE id = ?`, [
+      invoiceId,
+    ]);
+
+    await connection.commit();
+    connection.release();
+
+    res.json({ success: true, message: 'Invoice marked as not received.' });
+  } catch (error) {
+    await connection.rollback();
+    connection.release();
+    next(error);
+  }
+});
+
+// ---------------------------------------------------------------------------
 
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
@@ -395,7 +731,13 @@ router.post('/', authenticate, async (req, res, next) => {
 
     const rate = parseFloat(rateValue) || 0;
     const totalHours = rows.reduce((sum, r) => sum + (parseFloat(r.hrs) || 0), 0);
-    const totalWage = totalHours * rate;
+    // --- CHANGED: fixed conversion (days in the period's month / 8 hrs),
+    // matching the frontend — no longer dependent on totalHours. We still
+    // persist the raw `rate` (not effectiveRate) into rate_value below —
+    // that's "what was agreed", not a derived number. `periodStart` is
+    // used as the reference date for "days in that month". ---
+    const effectiveRate = computeEffectiveHourlyRate(rate, rateType, periodStart);
+    const totalWage = totalHours * effectiveRate;
 
     await connection.beginTransaction();
 

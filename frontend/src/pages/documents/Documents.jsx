@@ -31,6 +31,26 @@ const Documents = () => {
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [uploadType, setUploadType] = useState('offer_letter');
 
+  // The shared <Select> may call onChange with either a native event or the
+  // raw value directly, depending on how it wraps MUI's Select internally.
+  // Handling both here avoids a filter that silently no-ops if e.target is
+  // undefined (the most common reason a "controlled" filter dropdown appears
+  // to do nothing — setTypeFilter never actually runs, or throws and gets
+  // swallowed by React's event handling in production builds).
+  const extractValue = (eventOrValue) => (
+    eventOrValue && typeof eventOrValue === 'object' && 'target' in eventOrValue
+      ? eventOrValue.target.value
+      : eventOrValue
+  );
+
+  const handleTypeFilterChange = (eventOrValue) => {
+    setTypeFilter(extractValue(eventOrValue) ?? '');
+  };
+
+  const handleUploadTypeChange = (eventOrValue) => {
+    setUploadType(extractValue(eventOrValue) ?? 'other');
+  };
+
   const fetchDocs = async () => {
     setLoading(true);
     try {
@@ -125,7 +145,7 @@ const Documents = () => {
           <Select
             label="Document Type"
             value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
+            onChange={handleTypeFilterChange}
             options={[{ value: '', label: 'All Types' }, ...DOC_TYPES]}
             fullWidth
           />
@@ -145,7 +165,7 @@ const Documents = () => {
               <Select
                 label="Upload Type"
                 value={uploadType}
-                onChange={(e) => setUploadType(e.target.value)}
+                onChange={handleUploadTypeChange}
                 options={DOC_TYPES}
                 fullWidth
               />

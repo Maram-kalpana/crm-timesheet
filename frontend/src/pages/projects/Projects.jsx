@@ -620,31 +620,51 @@ const Projects = () => {
 
           {/* Actions */}
           <Grid size={{ xs: 12, lg: 3 }}>
-            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 1.5 }}>
-              <Button
-                variant="outlined"
-                fullWidth
-                onClick={() => {
-                  setSelectedProject(null);
-                  setView('list');
-                  refreshProjectList();
-                }}
-              >
-                Back to List
-              </Button>
-              <Button fullWidth startIcon={<Plus size={16} />} onClick={openAddUpdateDrawer}>
-                Add Update
-              </Button>
-              {canManageProjects && (
-                <>
-                  <Button variant="outlined" fullWidth startIcon={<Pencil size={16} />} onClick={() => openEditDrawer(selectedProject)}>
-                    Edit Project
-                  </Button>
-                  <Button variant="outlined" color="error" fullWidth startIcon={<Trash2 size={16} />} onClick={() => setProjectDeleteId(selectedProject.id)}>
-                    Delete Project
-                  </Button>
-                </>
-              )}
+            <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 0 }}>
+              <Box sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 1.25, flex: 1, justifyContent: 'center' }}>
+                <Button fullWidth startIcon={<Plus size={16} />} onClick={openAddUpdateDrawer}>
+                  Add Update
+                </Button>
+
+                {canManageProjects && (
+                  <Box display="flex" gap={1}>
+                    <Button
+                      variant="outlined"
+                      fullWidth
+                      startIcon={<Pencil size={14} />}
+                      onClick={() => openEditDrawer(selectedProject)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      fullWidth
+                      startIcon={<Trash2 size={14} />}
+                      onClick={() => setProjectDeleteId(selectedProject.id)}
+                    >
+                      Delete
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+
+              <Divider />
+
+              <Box sx={{ p: 1.5 }}>
+                <Button
+                  variant="text"
+                  fullWidth
+                  onClick={() => {
+                    setSelectedProject(null);
+                    setView('list');
+                    refreshProjectList();
+                  }}
+                  sx={{ color: 'text.secondary' }}
+                >
+                  ← Back to List
+                </Button>
+              </Box>
             </Card>
           </Grid>
         </Grid>

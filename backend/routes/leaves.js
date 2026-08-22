@@ -96,6 +96,13 @@ router.get('/', authenticate, async (req, res, next) => {
     }
     if (status) { where += ' AND lr.status = ?'; params.push(status); }
 
+    if (req.user.companyId == null) {
+      where += ' AND u.company_id IS NULL';
+    } else {
+      where += ' AND u.company_id = ?';
+      params.push(req.user.companyId);
+    }
+
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const [requests] = await pool.query(`
       SELECT lr.*, lt.name as leave_type_name, e.first_name, e.last_name, e.avatar,
@@ -113,7 +120,10 @@ router.get('/', authenticate, async (req, res, next) => {
     `, [...params, parseInt(limit), offset]);
 
     const [[{ total }]] = await pool.query(
-      `SELECT COUNT(*) as total FROM leave_requests lr ${where}`,
+      `SELECT COUNT(*) as total FROM leave_requests lr
+       JOIN employees e ON lr.employee_id = e.id
+       JOIN users u ON e.user_id = u.id
+       ${where}`,
       params
     );
 

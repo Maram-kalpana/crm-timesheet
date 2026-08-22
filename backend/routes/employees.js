@@ -16,6 +16,7 @@ const {
 } = require('../middleware/rbac');
 const { maskSensitiveEmployee, canManageRole } = require('../middleware/access');
 const { sendWelcomeEmail } = require('../utils/emailService');
+const { companyFilter, resolveEmployeeDepartmentId } = require('../utils/company');
 
 const router = express.Router();
 
@@ -103,7 +104,9 @@ function validateEmployeePayload(body) {
   pattern('emergencyContactPhone', 'Emergency contact phone', PATTERNS.phone, 'Enter a valid 10-digit emergency contact phone number.');
 
   // Professional information
-  req_('departmentId', 'Department');
+  if (isBlank(body.department) && isBlank(body.departmentId) && isBlank(body.departmentName)) {
+    errors.push('Department is required.');
+  }
   req_('designation', 'Designation');
   pattern('designation', 'Designation', PATTERNS.name, 'Designation must contain only letters.');
   req_('joiningDate', 'Joining date');
@@ -163,8 +166,9 @@ function validateEmployeePayload(body) {
 router.get('/assignable', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
   try {
     const { search } = req.query;
-    let where = "WHERE u.role = 'employee' AND u.is_active = TRUE";
-    const params = [];
+    const company = companyFilter(req.user);
+    let where = `WHERE u.role = 'employee' AND u.is_active = TRUE${company.sql}`;
+    const params = [...company.params];
     if (search) {
       where += ' AND (e.first_name LIKE ? OR e.last_name LIKE ? OR u.employee_id LIKE ?)';
       const s = `%${search}%`;
@@ -184,8 +188,9 @@ router.get('/assignable', authenticate, authorize('admin', 'hr'), async (req, re
 router.get('/team-leads', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
   try {
     const { search } = req.query;
-    let where = "WHERE u.role = 'team_lead' AND u.is_active = TRUE";
-    const params = [];
+    const company = companyFilter(req.user);
+    let where = `WHERE u.role = 'team_lead' AND u.is_active = TRUE${company.sql}`;
+    const params = [...company.params];
     if (search) {
       where += ' AND (e.first_name LIKE ? OR e.last_name LIKE ? OR u.employee_id LIKE ?)';
       const s = `%${search}%`;
@@ -221,8 +226,13 @@ router.get('/', authenticate, async (req, res, next) => {
       params.push(s, s, s, s);
     }
     if (department) {
-      where += ' AND e.department_id = ?';
-      params.push(department);
+      if (/^\d+$/.test(String(department))) {
+        where += ' AND e.department_id = ?';
+        params.push(department);
+      } else {
+        where += ' AND d.name LIKE ?';
+        params.push(`%${department}%`);
+      }
     }
     if (status === 'active') where += ' AND u.is_active = TRUE';
     if (status === 'inactive') where += ' AND u.is_active = FALSE';
@@ -233,7 +243,7 @@ router.get('/', authenticate, async (req, res, next) => {
     const order = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
     const [countResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM employees e JOIN users u ON e.user_id = u.id ${where}`,
+      `SELECT COUNT(*) as total FROM employees e JOIN users u ON e.user_id = u.id LEFT JOIN departments d ON e.department_id = d.id ${where}`,
       params
     );
 
@@ -364,7 +374,7 @@ router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) 
     const {
       employeeType = 'employee',
       email, firstName, lastName, phone, password,
-      departmentId, designation, joiningDate, employmentType, reportingManagerId,
+      departmentId, department, departmentName, designation, joiningDate, employmentType, reportingManagerId,
       dateOfBirth, gender, address, city, state, country, pincode,
       emergencyContactName, emergencyContactPhone,
       panNumber, aadharNumber,
@@ -384,17 +394,29 @@ router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) 
       return res.status(400).json({ success: false, message: 'Email already exists.' });
     }
     if (panNumber) {
-      const [dupPan] = await connection.query('SELECT id FROM employees WHERE pan_number = ?', [panNumber]);
+      const [dupPan] = await connection.query(
+        `SELECT e.id FROM employees e JOIN users u ON e.user_id = u.id WHERE e.pan_number = ? AND (u.company_id <=> ?)`,
+        [panNumber, req.user.companyId || null]
+      );
       if (dupPan.length) {
         return res.status(400).json({ success: false, message: 'PAN number already exists.' });
       }
     }
     if (aadharNumber) {
-      const [dupAadhaar] = await connection.query('SELECT id FROM employees WHERE aadhar_number = ?', [aadharNumber]);
+      const [dupAadhaar] = await connection.query(
+        `SELECT e.id FROM employees e JOIN users u ON e.user_id = u.id WHERE e.aadhar_number = ? AND (u.company_id <=> ?)`,
+        [aadharNumber, req.user.companyId || null]
+      );
       if (dupAadhaar.length) {
         return res.status(400).json({ success: false, message: 'Aadhaar number already exists.' });
       }
     }
+
+    const resolvedDepartmentId = await resolveEmployeeDepartmentId(
+      connection,
+      { department, departmentName, departmentId },
+      req.user.companyId
+    );
 
     const employeeCode = await generateEmployeeCode(employeeType === 'team_lead' ? 'team_lead' : role);
     const plainPassword = password && String(password).trim() ? String(password).trim() : generateTempPassword();
@@ -403,8 +425,8 @@ router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) 
     console.log('[Employee] Creating user:', { email, role, employeeCode });
 
     const [userResult] = await connection.query(
-      'INSERT INTO users (employee_id, email, password, role) VALUES (?, ?, ?, ?)',
-      [employeeCode, email, hashedPassword, role]
+      'INSERT INTO users (employee_id, email, password, role, company_id) VALUES (?, ?, ?, ?, ?)',
+      [employeeCode, email, hashedPassword, role, req.user.companyId || null]
     );
 
     const [empResult] = await connection.query(`
@@ -414,7 +436,7 @@ router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) 
         emergency_contact_name, emergency_contact_phone, employment_status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
     `, [
-      userResult.insertId, firstName, lastName, phone || null, departmentId || null, designation || null,
+      userResult.insertId, firstName, lastName, phone || null, resolvedDepartmentId || null, designation || null,
       joiningDate || new Date().toISOString().split('T')[0], employmentType || 'full-time', reportingManagerId || null,
       dateOfBirth || null, gender || null, address || null, city || null, state || null, country || 'India', pincode || null,
       panNumber || null, aadharNumber || null, bankName || null, bankAccountNumber || null, bankIfsc || null,
@@ -555,7 +577,10 @@ router.put('/:id', authenticate, async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Forbidden. Insufficient permissions.' });
     }
 
-    const fields = req.body;
+    const fields = { ...req.body };
+    if (fields.department != null || fields.departmentName != null) {
+      fields.department_id = await resolveEmployeeDepartmentId(pool, fields, req.user.companyId);
+    }
     const adminFields = [
       'first_name', 'last_name', 'phone', 'department_id', 'designation', 'joining_date',
       'employment_type', 'reporting_manager_id', 'date_of_birth', 'gender', 'address',

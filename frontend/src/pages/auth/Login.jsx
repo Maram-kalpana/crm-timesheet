@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'react-toastify';
 import {
@@ -25,7 +25,10 @@ const Login = () => {
   const [needsSetup, setNeedsSetup] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
-  const { register, handleSubmit, formState: { errors } } = useForm();
+  const location = useLocation();
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    defaultValues: { email: location.state?.email || '' },
+  });
 
   useEffect(() => {
     authAPI.setupStatus()
@@ -146,7 +149,14 @@ const Login = () => {
             </Box>
           </form>
 
-          <Typography variant="caption" color="text.secondary" display="block" textAlign="center" mt={3}>
+          <Typography variant="body2" color="text.secondary" textAlign="center" mt={3}>
+            Don't have an account?{' '}
+            <MuiLink component={Link} to="/register" underline="hover" color="primary" fontWeight={500}>
+              Register your company
+            </MuiLink>
+          </Typography>
+
+          <Typography variant="caption" color="text.secondary" display="block" textAlign="center" mt={2}>
             Demo: admin@company.com / Admin@123
           </Typography>
         </Paper>

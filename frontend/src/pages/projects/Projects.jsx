@@ -16,12 +16,6 @@ import {
 import { colors } from '../../theme';
 import { getErrorMessage, getFullName, downloadBlob } from '../../utils/helpers';
 
-const TECH_SUGGESTIONS = [
-  'React', 'Node.js', 'Express', 'MongoDB', 'MySQL', 'PostgreSQL',
-  'Redis', 'Docker', 'AWS', 'TypeScript', 'Next.js', 'Vue', 'Angular',
-  'Python', 'Django', 'Java', 'Spring Boot', 'GraphQL', 'Kubernetes',
-];
-
 const UPDATE_STATUS_OPTIONS = [
   { value: 'in-progress', label: 'In Progress' },
   { value: 'blocked', label: 'Blocked' },
@@ -60,6 +54,43 @@ const toDateInputValue = (value) => {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return '';
   return d.toISOString().slice(0, 10);
+};
+
+const TechStackInput = ({ value = [], onChange, label = 'Tech Stack' }) => {
+  const [draft, setDraft] = useState('');
+  const addItem = () => {
+    const item = draft.trim();
+    if (!item) return;
+    if (!value.includes(item)) onChange([...value, item]);
+    setDraft('');
+  };
+  return (
+    <Box>
+      <TextField
+        fullWidth
+        label={label}
+        placeholder="Type a tech stack and press Enter"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            addItem();
+          }
+        }}
+      />
+      <Box mt={1} display="flex" gap={0.5} flexWrap="wrap">
+        {value.map((item) => (
+          <Chip
+            key={item}
+            label={item}
+            size="small"
+            onDelete={() => onChange(value.filter((v) => v !== item))}
+          />
+        ))}
+      </Box>
+    </Box>
+  );
 };
 
 const DetailRow = ({ label, value }) => (
@@ -1023,21 +1054,7 @@ const Projects = () => {
                     control={control}
                     defaultValue={[]}
                     render={({ field }) => (
-                      <Autocomplete
-                        multiple
-                        freeSolo
-                        options={TECH_SUGGESTIONS}
-                        value={field.value || []}
-                        onChange={(_, value) => field.onChange(value)}
-                        renderTags={(value, getTagProps) =>
-                          value.map((option, index) => (
-                            <Chip label={option} {...getTagProps({ index })} key={option} size="small" />
-                          ))
-                        }
-                        renderInput={(params) => (
-                          <TextField {...params} label="Tech Stack" placeholder="Type and press enter" />
-                        )}
-                      />
+                      <TechStackInput value={field.value || []} onChange={field.onChange} />
                     )}
                   />
                 </Grid>
@@ -1258,21 +1275,7 @@ const EditProjectDrawer = ({
               control={controlEdit}
               defaultValue={[]}
               render={({ field }) => (
-                <Autocomplete
-                  multiple
-                  freeSolo
-                  options={TECH_SUGGESTIONS}
-                  value={field.value || []}
-                  onChange={(_, value) => field.onChange(value)}
-                  renderTags={(value, getTagProps) =>
-                    value.map((option, index) => (
-                      <Chip label={option} {...getTagProps({ index })} key={option} size="small" />
-                    ))
-                  }
-                  renderInput={(params) => (
-                    <TextField {...params} label="Tech Stack" placeholder="Type and press enter" />
-                  )}
-                />
+                <TechStackInput value={field.value || []} onChange={field.onChange} />
               )}
             />
           </Grid>

@@ -183,6 +183,13 @@ router.get('/all', authenticate, authorize('admin', 'hr', 'manager', 'team_lead'
       where += " AND u.role != 'admin'";
     }
 
+    if (req.user.companyId == null) {
+      where += ' AND u.company_id IS NULL';
+    } else {
+      where += ' AND u.company_id = ?';
+      params.push(req.user.companyId);
+    }
+
     if (date) {
       where += ' AND a.date = ?';
       params.push(date);
@@ -233,9 +240,9 @@ router.get('/export', authenticate, authorize('admin', 'hr'), async (req, res, n
       JOIN employees e ON a.employee_id = e.id
       JOIN users u ON e.user_id = u.id
       LEFT JOIN departments d ON e.department_id = d.id
-      WHERE MONTH(a.date) = ? AND YEAR(a.date) = ? AND u.role != 'admin'
+      WHERE MONTH(a.date) = ? AND YEAR(a.date) = ? AND u.role != 'admin' AND (u.company_id <=> ?)
       ORDER BY a.date, e.first_name
-    `, [m, y]);
+    `, [m, y, req.user.companyId || null]);
 
     const columns = [
       { header: 'Employee ID', key: 'employee_id' },

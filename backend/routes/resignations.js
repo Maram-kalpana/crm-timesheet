@@ -17,8 +17,9 @@ router.get('/', authenticate, authorize('admin', 'hr'), async (req, res, next) =
       JOIN employees e ON r.employee_id = e.id
       JOIN users u ON e.user_id = u.id
       LEFT JOIN departments d ON e.department_id = d.id
+      WHERE (u.company_id <=> ?)
       ORDER BY r.created_at DESC
-    `);
+    `, [req.user.companyId || null]);
     res.json({ success: true, data: rows });
   } catch (error) {
     next(error);

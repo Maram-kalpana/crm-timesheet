@@ -79,6 +79,18 @@ router.get('/', authenticate, async (req, res, next) => {
     if (targetEmpId) { where += ' AND d.employee_id = ?'; params.push(targetEmpId); }
     if (targetProjectId) { where += ' AND d.project_id = ?'; params.push(targetProjectId); }
     if (type) { where += ' AND d.type = ?'; params.push(type); }
+    if (!targetEmpId && !targetProjectId) {
+      where += ` AND (
+        EXISTS (
+          SELECT 1 FROM employees e JOIN users u ON e.user_id = u.id
+          WHERE e.id = d.employee_id AND (u.company_id <=> ?)
+        )
+        OR EXISTS (
+          SELECT 1 FROM projects p WHERE p.id = d.project_id AND (p.company_id <=> ?)
+        )
+      )`;
+      params.push(req.user.companyId || null, req.user.companyId || null);
+    }
 
     const [documents] = await pool.query(`${docSelect} ${where} ORDER BY d.created_at DESC`, params);
     res.json({ success: true, data: documents });

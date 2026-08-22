@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 const uploadDir = process.env.UPLOAD_DIR || 'uploads';
-const subdirs = ['avatars', 'documents', 'selfies', 'payslips'];
+const subdirs = ['avatars', 'documents', 'selfies', 'payslips', 'receipts'];
 
 subdirs.forEach((dir) => {
   const fullPath = path.join(uploadDir, dir);
@@ -18,6 +18,7 @@ const storage = multer.diskStorage({
     if (file.fieldname === 'avatar') folder = 'avatars';
     if (file.fieldname === 'selfie') folder = 'selfies';
     if (file.fieldname === 'document') folder = 'documents';
+    if (file.fieldname === 'receipt') folder = 'receipts';
     cb(null, path.join(uploadDir, folder));
   },
   filename: (req, file, cb) => {

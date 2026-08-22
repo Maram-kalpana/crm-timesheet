@@ -15,6 +15,17 @@ export const AuthProvider = ({ children }) => {
   });
   const [loading, setLoading] = useState(true);
 
+  const persistUser = (data) => {
+    const normalized = {
+      ...data.user,
+      role: normalizeRole(data.user.role),
+      needsLocaleSetup: data.needsLocaleSetup ?? data.user?.needsLocaleSetup ?? false,
+    };
+    localStorage.setItem('user', JSON.stringify(normalized));
+    setUser(normalized);
+    return { ...data, user: normalized };
+  };
+
   const fetchUser = useCallback(async () => {
     const token = localStorage.getItem('token');
     if (!token) {
@@ -23,9 +34,7 @@ export const AuthProvider = ({ children }) => {
     }
     try {
       const { data } = await authAPI.me();
-      const normalized = { ...data.user, role: normalizeRole(data.user.role) };
-      setUser(normalized);
-      localStorage.setItem('user', JSON.stringify(normalized));
+      persistUser(data);
     } catch {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
@@ -41,20 +50,14 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (credentials) => {
     const { data } = await authAPI.login(credentials);
-    const normalized = { ...data.user, role: normalizeRole(data.user.role) };
     localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(normalized));
-    setUser(normalized);
-    return data;
+    return persistUser(data);
   };
 
   const register = async (payload) => {
     const { data } = await authAPI.register(payload);
-    const normalized = { ...data.user, role: normalizeRole(data.user.role) };
     localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(normalized));
-    setUser(normalized);
-    return data;
+    return persistUser(data);
   };
 
   const logout = () => {
@@ -79,6 +82,8 @@ export const AuthProvider = ({ children }) => {
       user, loading, login, register, logout, fetchUser,
       isAdmin, isAdminOnly, isHr, isTeamLead, isEmployee, isManager,
       isAccountant, canViewAllTimesheets, canSendClientBilling,
+      needsLocaleSetup: Boolean(user?.needsLocaleSetup),
+      company: user?.company || null,
     }}>
       {children}
     </AuthContext.Provider>

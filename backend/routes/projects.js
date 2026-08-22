@@ -8,6 +8,10 @@ const upload = require('../middleware/upload');
 const router = express.Router();
 
 const canAccessProject = async (user, projectId) => {
+  const [projectRows] = await pool.query('SELECT company_id, manager_id FROM projects WHERE id = ?', [projectId]);
+  if (!projectRows.length) return false;
+  if ((projectRows[0].company_id || null) !== (user.companyId || null)) return false;
+
   const role = normalizeRole(user.role);
   if (role === 'admin' || role === 'hr') return true;
 
@@ -74,8 +78,8 @@ const fetchProjectUpdates = async (projectId, page = 1, limit = 10) => {
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const { status, search, page = 1, limit = 100 } = req.query;
-    let where = 'WHERE 1=1';
-    const params = [];
+    let where = 'WHERE (p.company_id <=> ?)';
+    const params = [req.user.companyId || null];
 
     if (status) { where += ' AND p.status = ?'; params.push(status); }
     if (search) { where += ' AND p.name LIKE ?'; params.push(`%${search}%`); }
@@ -198,16 +202,17 @@ router.post('/', authenticate, authorize('admin', 'hr'), async (req, res, next) 
     }
 
     const [tlCheck] = await connection.query(
-      `SELECT e.id FROM employees e JOIN users u ON e.user_id = u.id WHERE e.id = ? AND u.role = 'team_lead' AND u.is_active = TRUE`,
-      [teamLeadId]
+      `SELECT e.id FROM employees e JOIN users u ON e.user_id = u.id
+       WHERE e.id = ? AND u.role = 'team_lead' AND u.is_active = TRUE AND (u.company_id <=> ?)`,
+      [teamLeadId, req.user.companyId || null]
     );
     if (!tlCheck.length) {
       return res.status(400).json({ success: false, message: 'Selected team lead is invalid.' });
     }
 
     const [result] = await connection.query(
-      'INSERT INTO projects (name, description, status, priority, start_date, end_date, manager_id, tech_stack, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [name, description, status || 'planning', priority || 'medium', startDate, endDate, teamLeadId, JSON.stringify(techStack || []), req.user.employeeId]
+      'INSERT INTO projects (company_id, name, description, status, priority, start_date, end_date, manager_id, tech_stack, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [req.user.companyId || null, name, description, status || 'planning', priority || 'medium', startDate, endDate, teamLeadId, JSON.stringify(techStack || []), req.user.employeeId]
     );
 
     const memberOnlyIds = (memberIds || []).filter((id) => String(id) !== String(teamLeadId));

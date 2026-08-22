@@ -2,11 +2,13 @@ const express = require('express');
 const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { getTeamMemberIds } = require('../middleware/rbac');
+const { companyFilter } = require('../utils/company');
 
 const router = express.Router();
 
 router.get('/stats', authenticate, authorize('admin', 'hr'), async (req, res, next) => {
   try {
+    const company = companyFilter(req.user);
     const today = new Date().toISOString().split('T')[0];
     const month = new Date().getMonth() + 1;
     const year = new Date().getFullYear();
@@ -16,25 +18,41 @@ router.get('/stats', authenticate, authorize('admin', 'hr'), async (req, res, ne
     const [[{ totalEmployees }]] = await pool.query(`
       SELECT COUNT(*) as totalEmployees FROM employees e
       JOIN users u ON e.user_id = u.id
-      WHERE 1=1 ${excludeAdmin}
-    `);
+      WHERE 1=1 ${excludeAdmin}${company.sql}
+    `, company.params);
     const [[{ present }]] = await pool.query(
-      "SELECT COUNT(*) as present FROM attendance WHERE date = ? AND status IN ('present', 'late')",
-      [today]
+      `SELECT COUNT(*) as present FROM attendance a
+       JOIN employees e ON a.employee_id = e.id
+       JOIN users u ON e.user_id = u.id
+       WHERE a.date = ? AND a.status IN ('present', 'late')${company.sql}`,
+      [today, ...company.params]
     );
     const [[{ absent }]] = await pool.query(
-      "SELECT COUNT(*) as absent FROM attendance WHERE date = ? AND status = 'absent'",
-      [today]
+      `SELECT COUNT(*) as absent FROM attendance a
+       JOIN employees e ON a.employee_id = e.id
+       JOIN users u ON e.user_id = u.id
+       WHERE a.date = ? AND a.status = 'absent'${company.sql}`,
+      [today, ...company.params]
     );
     const [[{ late }]] = await pool.query(
-      "SELECT COUNT(*) as late FROM attendance WHERE date = ? AND status = 'late'",
-      [today]
+      `SELECT COUNT(*) as late FROM attendance a
+       JOIN employees e ON a.employee_id = e.id
+       JOIN users u ON e.user_id = u.id
+       WHERE a.date = ? AND a.status = 'late'${company.sql}`,
+      [today, ...company.params]
     );
     const [[{ pendingLeaves }]] = await pool.query(
-      "SELECT COUNT(*) as pendingLeaves FROM leave_requests WHERE status = 'pending'"
+      `SELECT COUNT(*) as pendingLeaves FROM leave_requests lr
+       JOIN employees e ON lr.employee_id = e.id
+       JOIN users u ON e.user_id = u.id
+       WHERE lr.status = 'pending'${company.sql}`,
+      company.params
     );
     const [[{ activeProjects }]] = await pool.query(
-      "SELECT COUNT(*) as activeProjects FROM projects WHERE status = 'active'"
+      `SELECT COUNT(*) as activeProjects FROM projects p
+       WHERE p.status NOT IN ('completed', 'cancelled')
+         AND (p.company_id <=> ?)`,
+      [req.user.companyId || null]
     );
 
     const [departmentStats] = await pool.query(`
@@ -43,36 +61,40 @@ router.get('/stats', authenticate, authorize('admin', 'hr'), async (req, res, ne
       FROM departments d
       LEFT JOIN employees e ON d.id = e.department_id
       LEFT JOIN users u ON e.user_id = u.id
+      WHERE (d.company_id <=> ?)
       GROUP BY d.id, d.name
-    `, [role]);
+    `, [role, req.user.companyId || null]);
 
     const [attendanceTrend] = await pool.query(`
-      SELECT DATE(date) as date,
-        SUM(CASE WHEN status IN ('present','late') THEN 1 ELSE 0 END) as present,
-        SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) as absent,
-        SUM(CASE WHEN status = 'late' THEN 1 ELSE 0 END) as late
-      FROM attendance
-      WHERE date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-      GROUP BY DATE(date)
+      SELECT DATE(a.date) as date,
+        SUM(CASE WHEN a.status IN ('present','late') THEN 1 ELSE 0 END) as present,
+        SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent,
+        SUM(CASE WHEN a.status = 'late' THEN 1 ELSE 0 END) as late
+      FROM attendance a
+      JOIN employees e ON a.employee_id = e.id
+      JOIN users u ON e.user_id = u.id
+      WHERE a.date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)${company.sql}
+      GROUP BY DATE(a.date)
       ORDER BY date
-    `);
+    `, company.params);
 
     const [recentActivities] = await pool.query(`
       SELECT al.*, u.email, e.first_name, e.last_name
       FROM activity_logs al
       LEFT JOIN users u ON al.user_id = u.id
       LEFT JOIN employees e ON e.user_id = u.id
+      WHERE 1=1${company.sql}
       ORDER BY al.created_at DESC LIMIT 10
-    `);
+    `, company.params);
 
     const [recentJoinees] = await pool.query(`
       SELECT e.*, d.name as department_name, u.employee_id
       FROM employees e
       JOIN users u ON e.user_id = u.id
       LEFT JOIN departments d ON e.department_id = d.id
-      WHERE 1=1 ${excludeAdmin}
+      WHERE 1=1 ${excludeAdmin}${company.sql}
       ORDER BY e.joining_date DESC LIMIT 5
-    `);
+    `, company.params);
 
     const [announcements] = await pool.query(`
       SELECT * FROM announcements WHERE is_active = TRUE ORDER BY created_at DESC LIMIT 5
@@ -112,11 +134,12 @@ router.get('/employee', authenticate, async (req, res, next) => {
     `, [empId, new Date().getFullYear()]);
 
     const [projects] = await pool.query(`
-      SELECT p.* FROM projects p
-      JOIN project_members pm ON p.id = pm.project_id
-      WHERE pm.employee_id = ? AND p.status = 'active'
-      LIMIT 5
-    `, [empId]);
+      SELECT DISTINCT p.* FROM projects p
+      LEFT JOIN project_members pm ON p.id = pm.project_id
+      WHERE (pm.employee_id = ? OR p.manager_id = ?)
+        AND (p.status IS NULL OR p.status NOT IN ('completed', 'cancelled'))
+      LIMIT 8
+    `, [empId, empId]);
 
     const [payslips] = await pool.query(
       'SELECT id, month, year, net_salary, status FROM payslips WHERE employee_id = ? ORDER BY year DESC, month DESC LIMIT 3',

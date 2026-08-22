@@ -37,7 +37,7 @@ const EmployeeEditModal = ({
       pincode: employee.pincode || '',
       emergencyContactName: employee.emergency_contact_name || '',
       emergencyContactPhone: employee.emergency_contact_phone || '',
-      departmentId: employee.department_id || '',
+      department: employee.department_name || '',
       designation: employee.designation || '',
       employmentType: employee.employment_type || 'full-time',
       joiningDate: toDateInput(employee.joining_date),
@@ -71,7 +71,7 @@ const EmployeeEditModal = ({
 
     if (isAdminMode) {
       Object.assign(payload, {
-        department_id: formData.departmentId || null,
+        department: formData.department || null,
         designation: formData.designation || null,
         employment_type: formData.employmentType || null,
         joining_date: formData.joiningDate || null,
@@ -164,18 +164,7 @@ const EmployeeEditModal = ({
               <Typography variant="subtitle2" color="primary" fontWeight={700} mt={1}>Professional Information</Typography>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Controller
-                name="departmentId"
-                control={control}
-                render={({ field }) => (
-                  <Select
-                    label="Department"
-                    value={field.value || ''}
-                    onChange={field.onChange}
-                    options={departments.map((d) => ({ value: d.id, label: d.name }))}
-                  />
-                )}
-              />
+              <Input label="Department" {...register('department')} />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
               <Input label="Designation" {...register('designation')} />

@@ -22,8 +22,8 @@ router.get('/summary', authenticate, authorize('admin', 'hr'), async (req, res, 
       JOIN employees e ON p.employee_id = e.id
       JOIN users u ON e.user_id = u.id
       LEFT JOIN departments d ON e.department_id = d.id
-      WHERE p.month = ? AND p.year = ?
-    `, [m, y]);
+      WHERE p.month = ? AND p.year = ? AND (u.company_id <=> ?)
+    `, [m, y, req.user.companyId || null]);
 
     const summary = {
       totalEmployees: payslips.length,
@@ -53,7 +53,7 @@ router.get('/my', authenticate, async (req, res, next) => {
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
     const [payslips] = await pool.query(`
-      SELECT p.*, e.first_name, e.last_name, e.designation, u.employee_id, d.name as department_name
+      SELECT p.*, e.first_name, e.last_name, e.designation, u.employee_id, u.company_id, d.name as department_name
       FROM payslips p
       JOIN employees e ON p.employee_id = e.id
       JOIN users u ON e.user_id = u.id
@@ -63,6 +63,9 @@ router.get('/:id', authenticate, async (req, res, next) => {
 
     if (!payslips.length) {
       return res.status(404).json({ success: false, message: 'Payslip not found.' });
+    }
+    if ((payslips[0].company_id || null) !== (req.user.companyId || null)) {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
     }
 
     const role = normalizeRole(req.user.role);
@@ -90,8 +93,8 @@ router.post('/generate', authenticate, authorize('admin'), async (req, res, next
       JOIN salary_structures ss ON e.id = ss.employee_id
       JOIN users u ON e.user_id = u.id
       WHERE u.is_active = TRUE AND (ss.effective_to IS NULL OR ss.effective_to >= ?)
-      AND ss.effective_from <= ?
-    `, [`${y}-${String(m).padStart(2, '0')}-01`, `${y}-${String(m).padStart(2, '0')}-01`]);
+      AND ss.effective_from <= ? AND (u.company_id <=> ?)
+    `, [`${y}-${String(m).padStart(2, '0')}-01`, `${y}-${String(m).padStart(2, '0')}-01`, req.user.companyId || null]);
 
     let generated = 0;
     for (const emp of employees) {

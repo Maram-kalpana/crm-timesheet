@@ -46,9 +46,20 @@ const getEmployeeUserRole = async (employeeId) => {
   return rows.length ? normalizeRole(rows[0].role) : null;
 };
 
+const sameCompanyEmployee = async (user, targetEmployeeId) => {
+  const [rows] = await pool.query(
+    `SELECT u.company_id FROM employees e JOIN users u ON e.user_id = u.id WHERE e.id = ?`,
+    [targetEmployeeId]
+  );
+  if (!rows.length) return false;
+  return (rows[0].company_id || null) === (user.companyId || null);
+};
+
 const canAccessEmployee = async (user, targetEmployeeId) => {
   const role = normalizeRole(user.role);
   const requesterEmpId = Number(user.employeeId);
+
+  if (!(await sameCompanyEmployee(user, targetEmployeeId))) return false;
 
   if (role === 'admin') return true;
   if (role === 'hr') {
@@ -73,18 +84,27 @@ const scopeEmployeeList = async (user) => {
   const role = normalizeRole(user.role);
   const requesterEmpId = Number(user.employeeId);
 
+  const companyClause = user.companyId == null
+    ? 'AND u.company_id IS NULL'
+    : 'AND u.company_id = ?';
+  const companyParams = user.companyId == null ? [] : [user.companyId];
+
   if (role === 'admin') {
-    // Admin is not an employee — exclude admin accounts from the employees list
-    return { clause: "AND u.role != 'admin'", params: [] };
+    return { clause: `AND u.role != 'admin' ${companyClause}`, params: companyParams };
   }
   if (role === 'hr') {
-    // HR list excludes admin and the HR user's own record
-    return { clause: "AND u.role != 'admin' AND e.id != ?", params: [requesterEmpId] };
+    return {
+      clause: `AND u.role != 'admin' AND e.id != ? ${companyClause}`,
+      params: [requesterEmpId, ...companyParams],
+    };
   }
   if (role === 'team_lead') {
     const teamIds = await getTeamMemberIds(requesterEmpId);
     if (!teamIds.length) return { clause: 'AND 1=0', params: [] };
-    return { clause: `AND e.id IN (${teamIds.map(() => '?').join(',')})`, params: teamIds };
+    return {
+      clause: `AND e.id IN (${teamIds.map(() => '?').join(',')}) ${companyClause}`,
+      params: [...teamIds, ...companyParams],
+    };
   }
   if (role === 'accountant') {
     return { clause: 'AND 1=0', params: [] };
@@ -130,6 +150,7 @@ module.exports = {
   canSendClientBilling,
   getTeamMemberIds,
   getEmployeeUserRole,
+  sameCompanyEmployee,
   canAccessEmployee,
   scopeEmployeeList,
   generateEmployeeCode,

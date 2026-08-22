@@ -1,7 +1,8 @@
 const jwt = require('jsonwebtoken');
+const pool = require('../config/db');
 const { normalizeRole } = require('./rbac');
 
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
@@ -11,6 +12,12 @@ const authenticate = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     decoded.role = normalizeRole(decoded.role);
+    try {
+      const [rows] = await pool.query('SELECT company_id FROM users WHERE id = ?', [decoded.id]);
+      decoded.companyId = rows[0]?.company_id ?? decoded.companyId ?? null;
+    } catch {
+      decoded.companyId = decoded.companyId ?? null;
+    }
     req.user = decoded;
     next();
   } catch (error) {

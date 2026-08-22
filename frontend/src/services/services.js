@@ -3,6 +3,7 @@ import api from './api';
 export const authAPI = {
   login: (data) => api.post('/auth/login', data),
   register: (data) => api.post('/auth/register', data),
+  registerAdmin: (data) => api.post('/auth/register-admin', data),
   setupStatus: () => api.get('/auth/setup-status'),
   me: () => api.get('/auth/me'),
   forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
@@ -135,4 +136,26 @@ export const announcementAPI = {
   getAll: () => api.get('/announcements'),
   getHolidays: (params) => api.get('/announcements/holidays', { params }),
   create: (data) => api.post('/announcements', data),
+};
+
+export const companyAPI = {
+  getById: (id) => api.get(`/companies/${id}`),
+  updateLocale: (id, data) => api.patch(`/companies/${id}/locale`, data),
+};
+
+export const expenseAPI = {
+  getAll: (params) => api.get('/expenses', { params }),
+  create: (formData) => api.post('/expenses', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  update: (id, formData) => api.patch(`/expenses/${id}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  updateStatus: (id, data) => api.patch(`/expenses/${id}/status`, data),
+  delete: (id) => api.delete(`/expenses/${id}`),
+  downloadReceipt: (id) => api.get(`/expenses/${id}/receipt`, { responseType: 'blob' }),
+};
+
+export const incomeAPI = {
+  getAll: (params) => api.get('/income', { params }),
 };

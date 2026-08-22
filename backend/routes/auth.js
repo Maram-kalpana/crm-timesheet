@@ -6,6 +6,7 @@ const pool = require('../config/db');
 const { authenticate } = require('../middleware/auth');
 const { normalizeRole, generateEmployeeCode } = require('../middleware/rbac');
 const { sendEmail } = require('../utils/emailService');
+const { fetchCompanyByUserId, needsLocaleSetup } = require('../utils/company');
 
 const router = express.Router();
 
@@ -42,18 +43,6 @@ router.post('/register', async (req, res, next) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    let departmentId = 1;
-    const [depts] = await connection.query('SELECT id FROM departments LIMIT 1');
-    if (!depts.length) {
-      const [deptResult] = await connection.query(
-        'INSERT INTO departments (name, description) VALUES (?, ?)',
-        [companyName || 'Administration', 'Default department']
-      );
-      departmentId = deptResult.insertId;
-    } else {
-      departmentId = depts[0].id;
-    }
-
     const [leaveTypes] = await connection.query('SELECT id FROM leave_types');
     if (!leaveTypes.length) {
       await connection.query(`
@@ -64,9 +53,36 @@ router.post('/register', async (req, res, next) => {
       `);
     }
 
+    let companyId = null;
+    try {
+      const [companyResult] = await connection.query(
+        `INSERT INTO companies (name, email, phone, registration_number)
+         VALUES (?, ?, ?, ?)`,
+        [
+          companyName || 'Company',
+          email,
+          phone || '0000000000',
+          `SETUP-${Date.now()}`,
+        ]
+      );
+      companyId = companyResult.insertId;
+    } catch (companyErr) {
+      if (companyErr.code !== 'ER_NO_SUCH_TABLE') throw companyErr;
+    }
+
+    const [deptResult] = await connection.query(
+      'INSERT INTO departments (name, description, company_id) VALUES (?, ?, ?)',
+      [companyName || 'Administration', 'Default department', companyId]
+    );
+    const departmentId = deptResult.insertId;
+
     const [userResult] = await connection.query(
-      'INSERT INTO users (employee_id, email, password, role) VALUES (?, ?, ?, ?)',
-      [adminCode, email, hashedPassword, 'admin']
+      companyId
+        ? 'INSERT INTO users (employee_id, email, password, role, company_id) VALUES (?, ?, ?, ?, ?)'
+        : 'INSERT INTO users (employee_id, email, password, role) VALUES (?, ?, ?, ?)',
+      companyId
+        ? [adminCode, email, hashedPassword, 'admin', companyId]
+        : [adminCode, email, hashedPassword, 'admin']
     );
 
     const [empResult] = await connection.query(`
@@ -83,15 +99,18 @@ router.post('/register', async (req, res, next) => {
     await connection.commit();
 
     const token = jwt.sign(
-      { id: userResult.insertId, email, role: 'admin', employeeId: empResult.insertId },
+      { id: userResult.insertId, email, role: 'admin', employeeId: empResult.insertId, companyId },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
+
+    const { company } = await fetchCompanyByUserId(connection, userResult.insertId);
 
     res.status(201).json({
       success: true,
       message: 'Admin account created successfully.',
       token,
+      needsLocaleSetup: needsLocaleSetup('admin', company),
       user: {
         id: userResult.insertId,
         email,
@@ -103,12 +122,139 @@ router.post('/register', async (req, res, next) => {
         avatar: null,
         departmentId,
         designation: 'System Administrator',
+        companyId,
+        company,
       },
     });
   } catch (error) {
     await connection.rollback();
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ success: false, message: 'Email or Employee ID already exists.' });
+    }
+    next(error);
+  } finally {
+    connection.release();
+  }
+});
+
+router.post('/register-admin', async (req, res, next) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const {
+      name,
+      companyName,
+      companyEmail,
+      phone,
+      registrationNumber,
+      password,
+      confirmPassword,
+    } = req.body;
+
+    if (!name || !companyName || !companyEmail || !phone || !registrationNumber || !password) {
+      return res.status(400).json({ success: false, message: 'All required fields must be filled.' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+    }
+    if (confirmPassword && password !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match.' });
+    }
+
+    const [dupEmail] = await connection.query(
+      'SELECT id FROM companies WHERE email = ? UNION SELECT id FROM users WHERE email = ?',
+      [companyEmail, companyEmail]
+    );
+    if (dupEmail.length) {
+      return res.status(400).json({ success: false, message: 'Company email is already registered.' });
+    }
+    const [dupReg] = await connection.query(
+      'SELECT id FROM companies WHERE registration_number = ?',
+      [registrationNumber]
+    );
+    if (dupReg.length) {
+      return res.status(400).json({ success: false, message: 'Registration number is already registered.' });
+    }
+
+    const nameParts = String(name).trim().split(/\s+/);
+    const firstName = nameParts[0] || 'Admin';
+    const lastName = nameParts.slice(1).join(' ') || 'User';
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const adminCode = await generateEmployeeCode('admin');
+
+    const [companyResult] = await connection.query(
+      `INSERT INTO companies (name, email, phone, registration_number)
+       VALUES (?, ?, ?, ?)`,
+      [companyName, companyEmail, phone, registrationNumber]
+    );
+    const companyId = companyResult.insertId;
+
+    const [deptResult] = await connection.query(
+      'INSERT INTO departments (name, description, company_id) VALUES (?, ?, ?)',
+      [companyName, 'Default department', companyId]
+    );
+    const departmentId = deptResult.insertId;
+
+    const [leaveTypes] = await connection.query('SELECT id FROM leave_types');
+    if (!leaveTypes.length) {
+      await connection.query(`
+        INSERT INTO leave_types (name, days_allowed, description, is_paid) VALUES
+        ('Casual Leave', 12, 'Casual leave', TRUE),
+        ('Sick Leave', 10, 'Medical leave', TRUE),
+        ('Earned Leave', 15, 'Annual leave', TRUE)
+      `);
+    }
+
+    const [userResult] = await connection.query(
+      'INSERT INTO users (employee_id, email, password, role, company_id) VALUES (?, ?, ?, ?, ?)',
+      [adminCode, companyEmail, hashedPassword, 'admin', companyId]
+    );
+
+    const [empResult] = await connection.query(`
+      INSERT INTO employees (user_id, first_name, last_name, phone, department_id, designation, joining_date, employment_type, employment_status)
+      VALUES (?, ?, ?, ?, ?, ?, CURDATE(), 'full-time', 'ACTIVE')
+    `, [userResult.insertId, firstName, lastName, phone, departmentId, 'System Administrator']);
+
+    const year = new Date().getFullYear();
+    await connection.query(`
+      INSERT INTO leave_balances (employee_id, leave_type_id, total_days, used_days, year)
+      SELECT ?, id, days_allowed, 0, ? FROM leave_types
+    `, [empResult.insertId, year]);
+
+    await connection.commit();
+
+    const { company } = await fetchCompanyByUserId(connection, userResult.insertId);
+    const token = jwt.sign(
+      { id: userResult.insertId, email: companyEmail, role: 'admin', employeeId: empResult.insertId, companyId },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Company registered successfully.',
+      token,
+      needsLocaleSetup: true,
+      user: {
+        id: userResult.insertId,
+        email: companyEmail,
+        role: 'admin',
+        employeeId: adminCode,
+        empId: empResult.insertId,
+        firstName,
+        lastName,
+        avatar: null,
+        departmentId,
+        designation: 'System Administrator',
+        companyId,
+        company,
+      },
+    });
+  } catch (error) {
+    await connection.rollback();
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ success: false, message: 'Email or registration number already exists.' });
     }
     next(error);
   } finally {
@@ -144,9 +290,11 @@ router.post('/login', async (req, res, next) => {
     }
 
     const normalizedRole = normalizeRole(user.role);
+    const { companyId, company } = await fetchCompanyByUserId(pool, user.id);
+    const localeSetupNeeded = needsLocaleSetup(normalizedRole, company);
     const expiresIn = rememberMe ? '30d' : (process.env.JWT_EXPIRES_IN || '7d');
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: normalizedRole, employeeId: user.emp_id },
+      { id: user.id, email: user.email, role: normalizedRole, employeeId: user.emp_id, companyId },
       process.env.JWT_SECRET,
       { expiresIn }
     );
@@ -154,6 +302,7 @@ router.post('/login', async (req, res, next) => {
     res.json({
       success: true,
       token,
+      needsLocaleSetup: localeSetupNeeded,
       user: {
         id: user.id,
         email: user.email,
@@ -165,6 +314,9 @@ router.post('/login', async (req, res, next) => {
         avatar: user.avatar,
         departmentId: user.department_id,
         designation: user.designation,
+        companyId,
+        company,
+        needsLocaleSetup: localeSetupNeeded,
       },
     });
   } catch (error) {
@@ -189,12 +341,16 @@ router.get('/me', authenticate, async (req, res, next) => {
     }
 
     const user = users[0];
+    const role = normalizeRole(user.role);
+    const { companyId, company } = await fetchCompanyByUserId(pool, user.id);
+    const localeSetupNeeded = needsLocaleSetup(role, company);
     res.json({
       success: true,
+      needsLocaleSetup: localeSetupNeeded,
       user: {
         id: user.id,
         email: user.email,
-        role: normalizeRole(user.role),
+        role,
         employeeId: user.employee_id,
         empId: user.emp_id,
         firstName: user.first_name,
@@ -204,6 +360,9 @@ router.get('/me', authenticate, async (req, res, next) => {
         departmentName: user.department_name,
         designation: user.designation,
         phone: user.phone,
+        companyId,
+        company,
+        needsLocaleSetup: localeSetupNeeded,
       },
     });
   } catch (error) {

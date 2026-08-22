@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { Box, Fade } from '@mui/material';
 import Sidebar, { DRAWER_WIDTH, COLLAPSED_WIDTH } from './Sidebar';
 import Navbar from './Navbar';
+import CompanyLocaleSetupDialog from '../components/CompanyLocaleSetupDialog';
 import { colors } from '../theme';
 
 const MainLayout = () => {
@@ -35,6 +36,7 @@ const MainLayout = () => {
           </Fade>
         </Box>
       </Box>
+      <CompanyLocaleSetupDialog />
     </Box>
   );
 };

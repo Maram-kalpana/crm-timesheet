@@ -32,10 +32,6 @@ export const SetupGuard = ({ children }) => {
     return <Navigate to="/register" replace />;
   }
 
-  if (!needsSetup && (location.pathname === '/register' || location.pathname === '/Register')) {
-    return <Navigate to="/login" replace />;
-  }
-
   return children;
 };
 

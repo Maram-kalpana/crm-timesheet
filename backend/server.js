@@ -17,6 +17,9 @@ const departmentRoutes = require('./routes/departments');
 const announcementRoutes = require('./routes/announcements');
 const resignationRoutes = require('./routes/resignations');
 const timesheetRoutes = require('./routes/timesheets');
+const companyRoutes = require('./routes/companies');
+const expenseRoutes = require('./routes/expenses');
+const incomeRoutes = require('./routes/income');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -43,6 +46,9 @@ app.use('/api/departments', departmentRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/resignations', resignationRoutes);
 app.use('/api/timesheets', timesheetRoutes);
+app.use('/api/companies', companyRoutes);
+app.use('/api/expenses', expenseRoutes);
+app.use('/api/income', incomeRoutes);
 
 app.use(errorHandler);
 

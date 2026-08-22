@@ -192,7 +192,7 @@ const Employees = () => {
         pincode: formData.pincode,
         emergencyContactName: formData.emergencyContactName,
         emergencyContactPhone: formData.emergencyContactPhone,
-        departmentId: formData.departmentId,
+        department: formData.department,
         designation: formData.designation,
         joiningDate: formData.joiningDate,
         employmentType: formData.employmentType || 'full-time',
@@ -610,21 +610,10 @@ const Employees = () => {
               <Typography variant="subtitle2" color="primary" fontWeight={700} mt={1}>Professional Information</Typography>
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>
-              <Controller
-                name="departmentId"
-                control={control}
-                rules={{ required: 'Required' }}
-                render={({ field, fieldState }) => (
-                  <>
-                    <Select
-                      label="Department"
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                      options={departments.map((d) => ({ value: d.id, label: d.name }))}
-                    />
-                    <SelectError message={fieldState.error?.message} />
-                  </>
-                )}
+              <Input
+                label="Department"
+                error={errors.department?.message}
+                {...register('department', { required: 'Required' })}
               />
             </Grid>
             <Grid size={{ xs: 12, sm: 6 }}>

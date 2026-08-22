@@ -12,6 +12,7 @@ const ConfirmDialog = ({
   cancelLabel = 'Cancel',
   loading = false,
   danger = false,
+  children,
 }) => (
   <Modal
     open={open}
@@ -28,6 +29,7 @@ const ConfirmDialog = ({
     }
   >
     <Typography variant="body1" color="text.secondary">{message}</Typography>
+    {children}
   </Modal>
 );
 

@@ -5,7 +5,7 @@ import {
 } from '@mui/material';
 import {
   LayoutDashboard, Clock, Users, FolderKanban, CalendarDays,
-  Wallet, FileText, Bell, ChevronLeft, ChevronRight, LogOut, Building2, UserCircle,
+  Wallet, FileText, Bell, ChevronLeft, ChevronRight, LogOut, Building2, UserCircle, Receipt, Banknote,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/ui/Avatar';
@@ -21,6 +21,8 @@ const menuItems = [
   { label: 'Projects', icon: FolderKanban, path: '/projects', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee'] },
   { label: 'Leave', icon: CalendarDays, path: '/leave', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },
   { label: 'Timesheet', icon: Wallet, path: '/payroll', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },
+  { label: 'Expenses', icon: Receipt, path: '/expenses', roles: ['admin', 'accountant'] },
+  { label: 'Income', icon: Banknote, path: '/income', roles: ['admin'] },
   { label: 'Documents', icon: FileText, path: '/documents', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },
   { label: 'Profile', icon: UserCircle, path: '/profile', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },
   { label: 'Resignations', icon: LogOut, path: '/resignations', roles: ['admin', 'hr', 'team_lead', 'manager', 'employee', 'accountant'] },

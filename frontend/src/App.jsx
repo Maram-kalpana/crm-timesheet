@@ -7,6 +7,7 @@ import 'react-toastify/dist/ReactToastify.css';
 
 import theme from './theme/muiTheme';
 import { AuthProvider } from './context/AuthContext';
+import { LocalizationProvider as AppLocalizationProvider } from './context/LocalizationContext';
 import { ProtectedRoute, PublicRoute, SetupGuard } from './components/ProtectedRoute';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/auth/Login';
@@ -19,6 +20,8 @@ import EmployeeProfile from './pages/employees/EmployeeProfile';
 import Projects from './pages/projects/Projects';
 import Leave from './pages/leave/Leave';
 import Payroll from './pages/payroll/Payroll';
+import Expenses from './pages/expenses/Expenses';
+import Income from './pages/income/Income';
 import Documents from './pages/documents/Documents';
 import Notifications from './pages/notifications/Notifications';
 import Profile from './pages/profile/Profile';
@@ -30,6 +33,7 @@ function App() {
       <LocalizationProvider dateAdapter={AdapterDayjs}>
         <CssBaseline />
         <AuthProvider>
+          <AppLocalizationProvider>
           <BrowserRouter>
             <Routes>
               <Route path="/register" element={<SetupGuard><PublicRoute><Register /></PublicRoute></SetupGuard>} />
@@ -45,6 +49,8 @@ function App() {
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/leave" element={<Leave />} />
                 <Route path="/payroll" element={<Payroll />} />
+                <Route path="/expenses" element={<ProtectedRoute roles={['admin', 'accountant']}><Expenses /></ProtectedRoute>} />
+                <Route path="/income" element={<ProtectedRoute roles={['admin']}><Income /></ProtectedRoute>} />
                 <Route path="/documents" element={<Documents />} />
                 <Route path="/notifications" element={<Notifications />} />
                 <Route path="/resignations" element={<Resignations />} />
@@ -60,6 +66,7 @@ function App() {
               <Route path="*" element={<SetupGuard><Navigate to="/login" replace /></SetupGuard>} />
             </Routes>
           </BrowserRouter>
+          </AppLocalizationProvider>
         </AuthProvider>
         <ToastContainer
           position="top-right"

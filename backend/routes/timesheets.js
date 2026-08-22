@@ -5,6 +5,7 @@ const multer = require('multer');
 const pool = require('../config/db');
 const { authenticate, authorize } = require('../middleware/auth');
 const { canViewAllTimesheets, canSendClientBilling } = require('../middleware/rbac');
+const { companyFilter } = require('../utils/company');
 const { createNotificationForUser } = require('../utils/notify');
 const {
   sendTimesheetEmail,
@@ -169,7 +170,8 @@ router.get('/', authenticate, async (req, res, next) => {
     if (!canViewAllTimesheets(req.user)) {
       return res.status(403).json({ success: false, message: 'Forbidden.' });
     }
-    const [rows] = await pool.query(`${TIMESHEET_SELECT} ORDER BY t.submitted_at DESC`);
+    const company = companyFilter(req.user);
+    const [rows] = await pool.query(`${TIMESHEET_SELECT} WHERE 1=1${company.sql} ORDER BY t.submitted_at DESC`, company.params);
     res.json({ success: true, data: rows });
   } catch (error) {
     next(error);
@@ -314,9 +316,10 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
     }
 
     const placeholders = timesheetIds.map(() => '?').join(',');
+    const company = companyFilter(req.user);
     const [rows] = await connection.query(
-      `${TIMESHEET_SELECT} WHERE t.id IN (${placeholders})`,
-      timesheetIds
+      `${TIMESHEET_SELECT} WHERE t.id IN (${placeholders})${company.sql}`,
+      [...timesheetIds, ...company.params]
     );
 
     if (!rows.length) {
@@ -427,9 +430,10 @@ router.post('/send-to-client', authenticate, async (req, res, next) => {
 
     const [invoiceResult] = await connection.query(
       `INSERT INTO invoices
-        (client, period_label, period_start, period_end, client_email, subject, total_amount, sent_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (company_id, client, period_label, period_start, period_end, client_email, subject, total_amount, sent_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        req.user.companyId || null,
         client,
         periodLabel,
         rows[0].period_start,
@@ -488,8 +492,8 @@ router.get('/invoices', authenticate, async (req, res, next) => {
     }
 
     const { status, client } = req.query;
-    const clauses = [];
-    const params = [];
+    const clauses = ['(i.company_id <=> ?)'];
+    const params = [req.user.companyId || null];
     if (status) {
       clauses.push('i.status = ?');
       params.push(status);
@@ -526,7 +530,10 @@ router.get('/invoices/:id', authenticate, async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Forbidden.' });
     }
 
-    const [invoiceRows] = await pool.query('SELECT * FROM invoices WHERE id = ?', [req.params.id]);
+    const [invoiceRows] = await pool.query(
+      'SELECT * FROM invoices WHERE id = ? AND (company_id <=> ?)',
+      [req.params.id, req.user.companyId || null]
+    );
     if (!invoiceRows.length) {
       return res.status(404).json({ success: false, message: 'Invoice not found.' });
     }
@@ -591,7 +598,10 @@ router.post('/invoices/:id/payments', authenticate, handleReceiptUpload, async (
     // Lock the invoice row so two simultaneous "record payment" requests can't race
     // on amount_received (accountants sharing the same client are a realistic scenario).
     await connection.beginTransaction();
-    const [invoiceRows] = await connection.query('SELECT * FROM invoices WHERE id = ? FOR UPDATE', [invoiceId]);
+    const [invoiceRows] = await connection.query(
+      'SELECT * FROM invoices WHERE id = ? AND (company_id <=> ?) FOR UPDATE',
+      [invoiceId, req.user.companyId || null]
+    );
     if (!invoiceRows.length) {
       await connection.rollback();
       connection.release();
@@ -601,7 +611,7 @@ router.post('/invoices/:id/payments', authenticate, handleReceiptUpload, async (
 
     const receiptPath = req.file ? `/uploads/invoice-receipts/${req.file.filename}` : null;
 
-    await connection.query(
+    const [payResult] = await connection.query(
       `INSERT INTO invoice_payments
         (invoice_id, transaction_id, amount, payment_date, notes, receipt_path, recorded_by_user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -618,6 +628,58 @@ router.post('/invoices/:id/payments', authenticate, handleReceiptUpload, async (
       newStatus,
       invoiceId,
     ]);
+
+    const [tsRows] = await connection.query(`${TIMESHEET_SELECT} WHERE t.invoice_id = ?`, [invoiceId]);
+    const employeeDetails = tsRows.map((row) => ({
+      timesheetId: row.id,
+      employeeName: `${row.first_name || ''} ${row.last_name || ''}`.trim(),
+      employeeCode: row.emp_code,
+      department: row.department_name,
+      hours: row.total_hours,
+      wage: row.total_wage,
+      rateType: row.rate_type,
+      rateValue: row.rate_value,
+    }));
+    let currency = 'INR';
+    if (req.user.companyId) {
+      const [companies] = await connection.query('SELECT currency FROM companies WHERE id = ?', [req.user.companyId]);
+      currency = companies[0]?.currency || 'INR';
+    }
+
+    if (req.user.companyId) {
+      try {
+        await connection.query(
+          `INSERT INTO income
+            (company_id, invoice_id, payment_id, client, client_email, period_label, period_start, period_end,
+             invoice_subject, invoice_total, amount, currency, payment_date, transaction_id, notes, receipt_path,
+             employee_details, timesheet_count, recorded_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            req.user.companyId,
+            invoiceId,
+            payResult.insertId,
+            invoice.client,
+            invoice.client_email,
+            invoice.period_label,
+            invoice.period_start,
+            invoice.period_end,
+            invoice.subject,
+            invoice.total_amount,
+            amountNum,
+            currency,
+            date,
+            String(transactionId).trim(),
+            notes ? String(notes).trim() : null,
+            receiptPath,
+            JSON.stringify(employeeDetails),
+            employeeDetails.length,
+            req.user.id,
+          ]
+        );
+      } catch (incErr) {
+        console.warn('[Income] Could not write income row:', incErr.message);
+      }
+    }
 
     await connection.commit();
     connection.release();
@@ -648,7 +710,10 @@ router.put('/invoices/:id/not-received', authenticate, async (req, res, next) =>
     const { reason } = req.body;
 
     await connection.beginTransaction();
-    const [invoiceRows] = await connection.query('SELECT * FROM invoices WHERE id = ? FOR UPDATE', [invoiceId]);
+    const [invoiceRows] = await connection.query(
+      'SELECT * FROM invoices WHERE id = ? AND (company_id <=> ?) FOR UPDATE',
+      [invoiceId, req.user.companyId || null]
+    );
     if (!invoiceRows.length) {
       await connection.rollback();
       connection.release();
@@ -661,6 +726,15 @@ router.put('/invoices/:id/not-received', authenticate, async (req, res, next) =>
        WHERE invoice_id = ? AND reversed_at IS NULL`,
       [req.user.id, reason ? String(reason).trim() : null, invoiceId]
     );
+
+    try {
+      await connection.query(
+        'UPDATE income SET reversed_at = NOW() WHERE invoice_id = ? AND reversed_at IS NULL',
+        [invoiceId]
+      );
+    } catch (incErr) {
+      console.warn('[Income] Could not reverse income row:', incErr.message);
+    }
 
     await connection.query(`UPDATE invoices SET amount_received = 0, status = 'not_received' WHERE id = ?`, [
       invoiceId,
@@ -681,7 +755,11 @@ router.put('/invoices/:id/not-received', authenticate, async (req, res, next) =>
 
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
-    const [rows] = await pool.query(`${TIMESHEET_SELECT} WHERE t.id = ?`, [req.params.id]);
+    const company = companyFilter(req.user);
+    const [rows] = await pool.query(
+      `${TIMESHEET_SELECT} WHERE t.id = ?${company.sql}`,
+      [req.params.id, ...company.params]
+    );
     if (!rows.length) {
       return res.status(404).json({ success: false, message: 'Timesheet not found.' });
     }

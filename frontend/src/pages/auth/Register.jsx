@@ -3,12 +3,12 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'react-toastify';
 import {
-  Box, Typography, Link as MuiLink, InputAdornment, IconButton, Grid, Paper,
+  Box, Typography, Link as MuiLink, IconButton, Grid, Paper,
 } from '@mui/material';
 import {
-  Mail, Lock, Eye, EyeOff, Building2, User, Phone, Shield, ArrowLeft,
+  Mail, Lock, Eye, EyeOff, Building2, User, Phone, Shield, Hash,
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+import { authAPI } from '../../services/services';
 import { Button, Input } from '../../components/ui';
 import { colors } from '../../theme';
 import { getErrorMessage } from '../../utils/helpers';
@@ -17,26 +17,23 @@ const Register = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
-  const { register: registerAdmin } = useAuth();
   const navigate = useNavigate();
   const { register, handleSubmit, watch, formState: { errors } } = useForm();
 
   const onSubmit = async (data) => {
     setLoading(true);
     try {
-      const nameParts = (data.adminName || '').trim().split(/\s+/);
-      const firstName = nameParts[0] || 'Admin';
-      const lastName = nameParts.slice(1).join(' ') || 'User';
-      await registerAdmin({
-        firstName,
-        lastName,
-        email: data.email,
-        password: data.password,
-        phone: data.phone,
+      await authAPI.registerAdmin({
+        name: data.name,
         companyName: data.companyName,
+        companyEmail: data.companyEmail,
+        phone: data.phone,
+        registrationNumber: data.registrationNumber,
+        password: data.password,
+        confirmPassword: data.confirmPassword,
       });
-      toast.success('Admin account created! Welcome to HRMS.');
-      navigate('/dashboard');
+      toast.success('Company registered. Please sign in.');
+      navigate('/login', { state: { email: data.companyEmail } });
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -61,15 +58,15 @@ const Register = () => {
               <Shield size={28} />
             </Box>
             <Box>
-              <Typography variant="h5" fontWeight={700}>Initial Setup</Typography>
-              <Typography variant="body2" sx={{ opacity: 0.8 }}>Create your admin account</Typography>
+              <Typography variant="h5" fontWeight={700}>Company Registration</Typography>
+              <Typography variant="body2" sx={{ opacity: 0.8 }}>Create your admin workspace</Typography>
             </Box>
           </Box>
           <Typography variant="h3" fontWeight={700} mb={2} lineHeight={1.2}>
-            Set up your HRMS platform
+            Register your company on HRMS
           </Typography>
           <Typography variant="body1" sx={{ opacity: 0.85, lineHeight: 1.7 }}>
-            Register as the first administrator to configure your company workspace, manage employees, and access all HR modules.
+            Set up your organization, then choose country and currency after your first sign-in.
           </Typography>
         </Box>
       </Box>
@@ -87,9 +84,9 @@ const Register = () => {
           }}
         >
           <Box mb={3}>
-            <Typography variant="h5" fontWeight={700}>Create Admin Account</Typography>
+            <Typography variant="h5" fontWeight={700}>Register your company</Typography>
             <Typography variant="body2" color="text.secondary" mt={0.5}>
-              This is a one-time setup for the first administrator
+              Create the administrator account for your organization
             </Typography>
           </Box>
 
@@ -97,37 +94,47 @@ const Register = () => {
             <Grid container spacing={2}>
               <Grid size={{ xs: 12 }}>
                 <Input
-                  label="Company Name"
-                  startIcon={<Building2 size={18} />}
-                  {...register('companyName')}
-                />
-              </Grid>
-              <Grid size={{ xs: 12 }}>
-                <Input
                   label="Admin Name"
                   startIcon={<User size={18} />}
                   placeholder="John Doe"
-                  error={errors.adminName?.message}
-                  {...register('adminName', { required: 'Admin name is required' })}
+                  error={errors.name?.message}
+                  {...register('name', { required: 'Admin name is required' })}
                 />
               </Grid>
               <Grid size={{ xs: 12 }}>
                 <Input
-                  label="Phone"
-                  startIcon={<Phone size={18} />}
-                  {...register('phone')}
+                  label="Company Name"
+                  startIcon={<Building2 size={18} />}
+                  error={errors.companyName?.message}
+                  {...register('companyName', { required: 'Company name is required' })}
                 />
               </Grid>
               <Grid size={{ xs: 12 }}>
                 <Input
-                  label="Email Address"
+                  label="Company Email"
                   type="email"
                   startIcon={<Mail size={18} />}
-                  error={errors.email?.message}
-                  {...register('email', {
-                    required: 'Email is required',
+                  error={errors.companyEmail?.message}
+                  {...register('companyEmail', {
+                    required: 'Company email is required',
                     pattern: { value: /^\S+@\S+\.\S+$/, message: 'Invalid email' },
                   })}
+                />
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <Input
+                  label="Phone Number"
+                  startIcon={<Phone size={18} />}
+                  error={errors.phone?.message}
+                  {...register('phone', { required: 'Phone number is required' })}
+                />
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+                <Input
+                  label="Registration Number"
+                  startIcon={<Hash size={18} />}
+                  error={errors.registrationNumber?.message}
+                  {...register('registrationNumber', { required: 'Registration number is required' })}
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 6 }}>
@@ -163,7 +170,7 @@ const Register = () => {
               </Grid>
               <Grid size={{ xs: 12 }}>
                 <Button type="submit" fullWidth loading={loading} size="large">
-                  Create Admin Account
+                  Register Company
                 </Button>
               </Grid>
             </Grid>
